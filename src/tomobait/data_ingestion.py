@@ -6,12 +6,11 @@ Sphinx documentation.
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Union
 
 from git import Repo
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import ReadTheDocsLoader
-from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -21,7 +20,7 @@ from .config import BaitConfig
 config = BaitConfig()
 
 
-def ingest_documentation(repo_url: str, documentation_dir: Union[str, Path]):
+def ingest_git_documentation(repo_url: str, documentation_dir: Union[str, Path]):
     """
     Clones a repository if it doesn't exist, or pulls the latest changes if it does.
     Then, it builds the Sphinx documentation.
@@ -32,7 +31,10 @@ def ingest_documentation(repo_url: str, documentation_dir: Union[str, Path]):
             documentation and repository will be stored.
     """
     documentation_dir = Path(documentation_dir)
-    repo_dir = documentation_dir / "2bm-docs"
+
+    # Get the last part and remove the specific suffix
+    repo_name = repo_url.split('/')[-1].removesuffix('.git')
+    repo_dir = documentation_dir / repo_name
 
     # --- 1. Clone or Pull Repository ---
     if not repo_dir.exists():
@@ -113,215 +115,22 @@ def load_chunk_embed(HTML_BUILD_DIR: str):
 
     print("Initializing embedding model...")
     # This model will be downloaded and run 100% locally
-    embeddings = HuggingFaceEmbeddings(model_name=config.retriever.embedding_model)
+    embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
 
     print("✅ Using local, open-source embeddings!")
     db_path = str(config.db_path)
+    print(f"\n\n\nEmbedding chunks and saving to vector store at: {db_path}...")
     print(f"Creating and saving vector store at {db_path}...")
-    # This is the magic command.
-    # It takes all splits, embeds them, and saves to disk.
-    Chroma.from_documents(
-        documents=splits, embedding=embeddings, persist_directory=db_path
-    )
+    if Path(db_path).exists():
+        vectorstore = Chroma(persist_directory=db_path, embedding_function=embeddings)
+        vectorstore.add_documents(splits)
+    else:
+        Chroma.from_documents(
+            documents=splits, embedding=embeddings, persist_directory=db_path
+        )
 
     print("🎉 All done!")
     print(f"Your knowledge base is ready and saved in '{db_path}'.")
-
-
-def create_resource_documents() -> List[Document]:
-    """
-    Convert resources from config.yaml into LangChain documents for embedding.
-    This makes all the beamline info, software packages, etc. searchable.
-    """
-    documents = []
-
-    # Get resources from config.documentation.resources
-    resources = config.documentation.resources or {}
-
-    if not resources:
-        print("⚠️  No resources found in config.yaml")
-        return documents
-
-    print(f"📚 Creating documents from {len(resources)} resource categories...")
-
-    # Helper function to recursively extract information
-    def dict_to_text(data: Dict[str, Any], prefix: str = "") -> str:
-        """Convert a nested dictionary to readable text."""
-        lines = []
-        for key, value in data.items():
-            if isinstance(value, dict):
-                lines.append(f"{prefix}{key}:")
-                lines.append(dict_to_text(value, prefix + "  "))
-            elif isinstance(value, list):
-                lines.append(f"{prefix}{key}:")
-                for item in value:
-                    if isinstance(item, dict):
-                        lines.append(dict_to_text(item, prefix + "  - "))
-                    else:
-                        lines.append(f"{prefix}  - {item}")
-            else:
-                lines.append(f"{prefix}{key}: {value}")
-        return "\n".join(lines)
-
-    # Process beamlines
-    if "beamlines" in resources:
-        for beamline_id, beamline_info in resources["beamlines"].items():
-            content = f"Beamline: {beamline_id.upper()}\n\n"
-            content += dict_to_text(beamline_info)
-
-            documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "source": "config_resources",
-                        "category": "beamline",
-                        "beamline_id": beamline_id,
-                    },
-                )
-            )
-
-    # Process organizations
-    if "organizations" in resources:
-        for org_id, org_info in resources["organizations"].items():
-            content = f"Organization: {org_id.upper()}\n\n"
-            content += dict_to_text(org_info)
-
-            documents.append(
-                Document(
-                    page_content=content,
-                    metadata={
-                        "source": "config_resources",
-                        "category": "organization",
-                        "organization_id": org_id,
-                    },
-                )
-            )
-
-    # Process software categories
-    if "software" in resources:
-        for software_category, packages in resources["software"].items():
-            for package_name, package_info in packages.items():
-                content = f"Software Package: {package_name}\n"
-                content += f"Category: {software_category}\n\n"
-                content += dict_to_text(package_info)
-
-                documents.append(
-                    Document(
-                        page_content=content,
-                        metadata={
-                            "source": "config_resources",
-                            "category": "software",
-                            "software_category": software_category,
-                            "package_name": package_name,
-                        },
-                    )
-                )
-
-    # Process python ecosystem
-    if "python_ecosystem" in resources:
-        for eco_category, packages in resources["python_ecosystem"].items():
-            for package in packages:
-                if isinstance(package, dict):
-                    content = f"Python Package: {package.get('name', 'Unknown')}\n"
-                    content += f"Ecosystem Category: {eco_category}\n\n"
-                    content += dict_to_text(package)
-
-                    documents.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "source": "config_resources",
-                                "category": "python_ecosystem",
-                                "ecosystem_category": eco_category,
-                                "package_name": package.get("name", "Unknown"),
-                            },
-                        )
-                    )
-
-    # Process community resources
-    if "community" in resources:
-        for community_category, items in resources["community"].items():
-            for item in items:
-                if isinstance(item, dict):
-                    content = "Community Resource\n"
-                    content += f"Category: {community_category}\n\n"
-                    content += dict_to_text(item)
-
-                    documents.append(
-                        Document(
-                            page_content=content,
-                            metadata={
-                                "source": "config_resources",
-                                "category": "community",
-                                "community_category": community_category,
-                            },
-                        )
-                    )
-
-    # Process GitHub organizations
-    if "github_organizations" in resources:
-        for org in resources["github_organizations"]:
-            if isinstance(org, dict):
-                content = f"GitHub Organization: {org.get('name', 'Unknown')}\n\n"
-                content += dict_to_text(org)
-
-                documents.append(
-                    Document(
-                        page_content=content,
-                        metadata={
-                            "source": "config_resources",
-                            "category": "github_organization",
-                            "organization_name": org.get("name", "Unknown"),
-                        },
-                    )
-                )
-
-    print(f"✅ Created {len(documents)} resource documents")
-    return documents
-
-
-def embed_resources():
-    """
-    Embed resource documents from config.yaml into the vector store.
-    """
-    print("\n🔧 Processing resources from config.yaml...")
-
-    # Create documents from resources
-    resource_docs = create_resource_documents()
-
-    if not resource_docs:
-        print("⚠️  No resource documents to embed")
-        return
-
-    # Initialize embeddings
-    print("Initializing embedding model...")
-    embeddings = HuggingFaceEmbeddings(model_name=config.retriever.embedding_model)
-
-    # Load existing vectorstore or create new one
-    db_path = config.db_path
-    db_path_str = str(db_path)
-    print(f"Adding resource documents to vector store at {db_path_str}...")
-
-    # Check if vectorstore exists
-    if db_path.exists():
-        # Add to existing vectorstore
-        vectorstore = Chroma(
-            persist_directory=db_path_str, embedding_function=embeddings
-        )
-        vectorstore.add_documents(resource_docs)
-        print(
-            f"✅ Added {len(resource_docs)} resource documents to existing vector store"
-        )
-    else:
-        # Create new vectorstore with resource docs
-        Chroma.from_documents(
-            documents=resource_docs, embedding=embeddings, persist_directory=db_path_str
-        )
-        print(
-            f"✅ Created new vector store with {len(resource_docs)} resource documents"
-        )
-
-    print("🎉 Resources embedded successfully!")
 
 
 if __name__ == "__main__":
@@ -335,7 +144,16 @@ if __name__ == "__main__":
     # Process all git repositories
     for repo_url in config.documentation.git_repos:
         print(f"\n📦 Processing repository: {repo_url}")
-        ingest_documentation(repo_url, docs_output_dir)
+        ingest_git_documentation(repo_url, docs_output_dir)
+
+        # Load, chunk, and embed from the built HTML
+        repo_name = repo_url.split("/")[-1].removesuffix(".git")
+        sphinx_path = docs_output_dir / repo_name / "docs" / "_build" / "html"
+        if sphinx_path.exists():
+            print(f"\n📚 Loading and embedding documentation from: {sphinx_path}")
+            load_chunk_embed(str(sphinx_path))
+        else:
+            print(f"⚠️  Sphinx build path does not exist: {sphinx_path}")
 
     # Process all local folders
     for local_folder in config.documentation.local_folders:
@@ -345,14 +163,3 @@ if __name__ == "__main__":
             load_chunk_embed(local_folder)
         else:
             print(f"⚠️  WARNING: Local folder does not exist: {local_folder}")
-
-    # Load, chunk, and embed from the built HTML
-    sphinx_path = config.sphinx_build_html_path
-    if sphinx_path and sphinx_path.exists():
-        print(f"\n📚 Loading and embedding documentation from: {sphinx_path}")
-        load_chunk_embed(str(sphinx_path))
-    else:
-        print("⚠️  Sphinx build path not configured or does not exist")
-
-    # Embed resources from config.yaml
-    embed_resources()

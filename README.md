@@ -155,7 +155,6 @@ documentation:
   git_repos:             # List of Git repository URLs
   local_folders:         # List of local folder paths
   docs_output_dir:       # Where to store documentation (defaults to {data_dir}/documentation)
-  sphinx_build_html_path: # Path to built Sphinx HTML (auto-detected if null)
   resources:             # Reference resources (beamlines, software, organizations, etc.)
 
 retriever:

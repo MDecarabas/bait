@@ -13,9 +13,9 @@ def get_documentation_retriever():
     """
     Initializes and returns a retriever for our ChromaDB.
     """
-    print(f"Loading embedding model: {config.retriever.embedding_model}")
+    print(f"Loading embedding model: {config.embedding.model}")
     # Initialize the same embedding model
-    embeddings = HuggingFaceEmbeddings(model_name=config.retriever.embedding_model)
+    embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
 
     db_path = str(config.db_path)
     print(f"Connecting to vector store at: {db_path}")

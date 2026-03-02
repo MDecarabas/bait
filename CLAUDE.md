@@ -205,6 +205,5 @@ All paths in the codebase are computed from `config.yaml`:
 - `config.get_db_path()` → `.bait-{project.name}/chroma_db`
 - `config.get_conversations_dir()` → `.bait-{project.name}/conversations`
 - `config.get_docs_output_dir()` → `.bait-{project.name}/documentation`
-- `config.get_sphinx_build_html_path()` → Auto-detected or configured
 
 This ensures no hardcoded paths exist outside of config.yaml.

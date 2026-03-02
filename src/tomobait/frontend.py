@@ -9,11 +9,12 @@ from .config import BaitConfig
 # Load configuration
 config = BaitConfig()
 BACKEND_URL = f"http://{config.server.backend_host}:{config.server.backend_port}/chat"
-DOCS_DIR = (
-    os.path.abspath(config.sphinx_build_html_path)
-    if config.sphinx_build_html_path and os.path.exists(config.sphinx_build_html_path)
-    else None
-)
+DOCS_DIR = None
+if config.documentation.git_repos:
+    repo_name = config.documentation.git_repos[0].split("/")[-1].removesuffix(".git")
+    _docs_path = config.docs_output_dir / repo_name / "docs" / "_build" / "html"
+    if _docs_path.exists():
+        DOCS_DIR = os.path.abspath(_docs_path)
 
 # Global state for current conversation
 current_conversation_id = None

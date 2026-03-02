@@ -35,20 +35,6 @@ class DocumentationSourceConfig(BaseModel):
     local_folders: List[str] = Field(
         default_factory=list, description="List of local folder paths to index"
     )
-    docs_output_dir: Optional[str] = Field(
-        default=None,
-        description=(
-            "Directory where documentation will be stored "
-            "(defaults to {data_dir}/documentation)"
-        ),
-    )
-    sphinx_build_html_path: Optional[str] = Field(
-        default=None,
-        description=(
-            "Path to built Sphinx HTML documentation "
-            "(defaults to {data_dir}/documentation/repos/*/docs/_build/html)"
-        ),
-    )
     resources: Optional[Dict] = Field(
         default=None,
         description="Reference resources (beamlines, software, organizations, etc.)",
@@ -58,14 +44,6 @@ class DocumentationSourceConfig(BaseModel):
 class RetrieverConfig(BaseModel):
     """Configuration for the document retriever."""
 
-    db_path: Optional[str] = Field(
-        default=None,
-        description="ChromaDB persist directory (defaults to {data_dir}/chroma_db)",
-    )
-    embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="HuggingFace embedding model name",
-    )
     k: int = Field(
         default=3, description="Number of documents to retrieve per query", ge=1, le=20
     )
@@ -145,6 +123,30 @@ class ServerConfig(BaseModel):
     frontend_host: str = Field(default="0.0.0.0", description="Frontend server host")
     frontend_port: int = Field(default=8000, description="Frontend server port")
 
+class EmbeddingConfig(BaseModel):
+    """Configuration for embedding model."""
+
+    provider: str = Field(
+        default="huggingface",
+        description="Embedding provider: 'huggingface' (local) or 'argo' (ANL Argo API)",
+    )
+    model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="Model name (HuggingFace model or Argo model like 'ada002')",
+    )
+    device: str = Field(
+        default="cpu",
+        description="Device for local embeddings: 'cpu', 'cuda', 'mps', or 'auto'",
+    )
+    argo_user: Optional[str] = Field(
+        default=None,
+        description="ANL username for Argo API (if provider is 'argo')",
+    )
+    argo_base_url: str = Field(
+        default="https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/embed/",
+        description="Base URL for Argo embedding API",
+    )
+
 
 class BaitConfig(BaseSettings):
     """Main configuration for TomoBait, loaded from config.yaml."""
@@ -159,6 +161,7 @@ class BaitConfig(BaseSettings):
         default_factory=DocumentationSourceConfig
     )
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -181,25 +184,13 @@ class BaitConfig(BaseSettings):
     @property
     def docs_output_dir(self) -> Path:
         """Get the resolved documentation output directory path."""
-        if self.documentation.docs_output_dir:
-            return Path(self.documentation.docs_output_dir)
         return self.data_dir / "documentation"
 
-    @computed_field
-    @property
-    def sphinx_build_html_path(self) -> Optional[Path]:
-        """Get the resolved Sphinx build HTML path."""
-        if self.documentation.sphinx_build_html_path:
-            return Path(self.documentation.sphinx_build_html_path)
-        # Return None - let ingestion discover the path
-        return None
 
     @computed_field
     @property
     def db_path(self) -> Path:
         """Get the resolved ChromaDB path."""
-        if self.retriever.db_path:
-            return Path(self.retriever.db_path)
         return self.data_dir / "chroma_db"
 
     @classmethod
