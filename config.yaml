@@ -6,38 +6,21 @@ documentation:
   git_repos:
   - https://github.com/xray-imaging/2bm-docs.git
   local_folders: []
-  docs_output_dir: /Users/ecodrea/tomo-bait/tomo_documentation
-  sphinx_build_html_path: /Users/ecodrea/tomo-bait/tomo_documentation/2bm-docs/docs/_build/html
-  resources:
-    beamlines:
-      2bm:
-        name: 2-BM Bending Magnet Beamline
-        official_page: https://www.aps.anl.gov/Beamlines/Directory/Details?beamline_id=22
-        documentation: https://2bm-docs.readthedocs.io/
-        github_docs: https://github.com/xray-imaging/2bm-docs
-        purpose: X-ray imaging and tomography with emphasis on time-resolved studies
 retriever:
-  db_path: null
   embedding_model: sentence-transformers/all-MiniLM-L6-v2
   k: 3
   search_type: similarity
   score_threshold: null
+embedding:
+  provider: huggingface  # 'huggingface' for local or 'anl_argo' for ANL Argo API
+  model: 'sentence-transformers/all-MiniLM-L6-v2'  # For argo: 'ada002'. For huggingface: 'sentence-transformers/all-MiniLM-L6-v2'
+  device: cpu  # Device for local embeddings: 'cpu', 'cuda', 'mps', or 'auto'
+  argo_user: null  # If null, falls back to llm.api_key (your ANL username)
+  argo_base_url: https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/embed/
 llm:
-  # api_key_env: GEMINI_API_KEY
-  # model: gemini-2.5-flash-lite
-  # api_type: google
-  # system_message: 'You are an expert on this project''s documentation. When answering
-  #   questions: 1. Answer based *only* on the context from your ''query_documentation''
-  #   tool 2. Provide concise but complete responses (2-3 paragraphs) 3. For "how to"
-  #   questions, provide step-by-step numbered instructions 4. Include relevant source
-  #   links from the context (documentation URLs, GitHub, PyPI, etc.) 5. If the context
-  #   is insufficient, say so. Do not make up answers.'
-  # anl_api_url: null
-  # anl_user: null
-  # anl_model: null
   provider: anl_argo
   api_key: ecodrea
-  model: gpt4o
+  model: claudeopus46
   api_type: openai
   base_url: https://apps-dev.inside.anl.gov/argoapi/v1/
   system_message: 'You are an expert on this project''s documentation. When answering

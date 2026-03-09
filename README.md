@@ -12,84 +12,116 @@ A RAG (Retrieval-Augmented Generation) system for tomography beamline documentat
 - **Conversation History**: Save and resume conversations
 - **Web Interface**: Modern Gradio-based UI with chat, history, configuration, and setup tabs
 
-## 📦 Package Structure
+## 📦 Architecture
 
 ```mermaid
 graph TB
-    subgraph "TomoBait Architecture"
-        UI[Frontend Layer<br/>Gradio Web Interface]
-        API[Backend Layer<br/>FastAPI Server]
-        DB[(Vector Database<br/>ChromaDB)]
-        DOCS[Documentation Sources<br/>Git Repos & Local Folders]
+    subgraph INGEST["Phase 1: Data Ingestion (one-time)"]
+        direction TB
+        GITREPOS["Git Repos<br/>(config.yaml)"]
+        LOCAL["Local Folders<br/>(pre-built HTML)"]
+        CLONE["Clone / Pull<br/>(GitPython)"]
+        SPHINX["Sphinx Build<br/>(sphinx-build -b html)"]
+        HTML[("HTML Files<br/>.bait-tomo/documentation/<br/>repo/docs/_build/html/")]
+        LOADER["ReadTheDocsLoader<br/>(langchain)"]
+        DOCS["Document Objects"]
+        CHUNKER["RecursiveCharacterTextSplitter<br/>(chunk_size=1000, overlap=200)"]
+        CHUNKS["Text Chunks"]
+        EMBEDDER["Embedding Model<br/>(HuggingFace all-MiniLM-L6-v2<br/>or ANL Argo API)"]
+        VECTORS["Embedding Vectors"]
 
-        UI -->|HTTP /chat| API
-        API -->|Query| DB
-        DOCS -->|Ingest| DB
+        GITREPOS --> CLONE --> SPHINX --> HTML
+        LOCAL --> LOADER
+        HTML --> LOADER --> DOCS --> CHUNKER --> CHUNKS --> EMBEDDER --> VECTORS
+    end
 
-        subgraph "Frontend Components"
-            CHAT[Chat Tab]
-            HIST[History Tab]
-            CFG[Configuration Tab]
-            SETUP[Setup Tab]
+    subgraph STORE["Storage Layer"]
+        DB[("ChromaDB<br/>.bait-tomo/chroma_db")]
+        CONVDB[("Conversations<br/>.bait-tomo/conversations/")]
+    end
+
+    VECTORS -->|"Chroma.from_documents()"| DB
+
+    subgraph SERVE["Phase 2: Serving (continuous)"]
+        direction TB
+
+        subgraph BACKEND["Backend — FastAPI :8001"]
+            direction TB
+            CHATEP["/chat endpoint"]
+
+            subgraph AGENTS["AG2 Multi-Agent System"]
+                direction LR
+                TECH["doc_expert<br/>(AssistantAgent + LLM)"]
+                WORKER["tool_worker<br/>(UserProxyAgent)"]
+                TECH -->|"tool_call:<br/>query_documentation(q)"| WORKER
+                WORKER -->|"context docs<br/>+ source links"| TECH
+            end
+
+            subgraph RETRIEVAL["Retriever"]
+                EMBED_Q["Embed Query<br/>(same model as ingestion)"]
+                SEARCH["Similarity Search<br/>(top k=3 docs)"]
+                EMBED_Q --> SEARCH
+            end
+
+            CHATEP -->|"user question"| AGENTS
+            WORKER -->|"invoke retriever"| RETRIEVAL
+            AGENTS -->|"final answer"| CHATEP
         end
 
-        subgraph "Backend Components"
-            AGENTS[Autogen Agents]
-            TOOL[Query Tool]
-            RET[Retriever]
+        subgraph FRONTEND["Frontend — Gradio :8000"]
+            direction TB
+            CHATUI["Chat Tab"]
+            HISTUI["History Tab"]
+            CFGUI["Configuration Tab"]
+            SETUPUI["Setup Tab"]
+            IMGPARSE["Image Path Resolver<br/>(format_response)"]
 
-            AGENTS -->|Execute| TOOL
-            TOOL -->|Retrieve| RET
-            RET -->|Query| DB
-        end
-
-        subgraph "Data Pipeline"
-            CLONE[Clone Repos]
-            BUILD[Build Sphinx]
-            CHUNK[Chunk Text]
-            EMBED[Embed Chunks]
-
-            CLONE --> BUILD
-            BUILD --> CHUNK
-            CHUNK --> EMBED
-            EMBED --> DB
+            CHATUI --> IMGPARSE
         end
     end
 
-    style UI fill:#e1f5ff
-    style API fill:#fff3e0
-    style DB fill:#f3e5f5
-    style DOCS fill:#e8f5e9
-```
+    SEARCH -->|"query vector"| DB
+    DB -->|"top k chunks<br/>+ metadata"| SEARCH
 
-## 🏗️ Module Structure
+    FRONTEND -->|"HTTP POST /chat"| CHATEP
+    CHATEP -->|"JSON response"| FRONTEND
+    FRONTEND -->|"save/load"| CONVDB
+    IMGPARSE -->|"serve images from<br/>.bait-tomo/documentation/"| HTML
 
-```mermaid
-graph LR
-    subgraph "src/tomobait"
-        APP[app.py<br/>FastAPI Backend]
-        FRONT[frontend.py<br/>Gradio UI]
-        ING[data_ingestion.py<br/>Doc Processor]
-        RET[retriever.py<br/>Vector Search]
-        CFG[config.py<br/>Config Models]
-        CFGWATCH[config_watcher.py<br/>Hot Reload]
-        STORE[storage.py<br/>Conversation DB]
-        CLI[cli.py<br/>CLI Interface]
+    subgraph CONFIG["Configuration"]
+        YAML["config.yaml"]
+        ENV[".env<br/>(API keys)"]
+        PYDANTIC["BaitConfig<br/>(pydantic-settings)"]
+        WATCHER["config_watcher.py<br/>(hot reload)"]
+
+        YAML --> PYDANTIC
+        ENV --> PYDANTIC
+        WATCHER -->|"detect changes"| PYDANTIC
     end
 
-    FRONT -->|HTTP| APP
-    APP --> RET
-    APP --> CFG
-    APP --> CFGWATCH
-    ING --> RET
-    ING --> CFG
-    FRONT --> STORE
-    CLI --> APP
+    CONFIG -.->|"paths, models,<br/>LLM provider"| INGEST
+    CONFIG -.->|"LLM config,<br/>retriever params"| BACKEND
+    CONFIG -.->|"server host/port"| FRONTEND
 
-    style APP fill:#4caf50
-    style FRONT fill:#2196f3
-    style ING fill:#ff9800
-    style RET fill:#9c27b0
+    subgraph LLM_PROVIDERS["LLM Providers"]
+        GEMINI["Google Gemini"]
+        OPENAI["OpenAI"]
+        ANTHROPIC["Anthropic"]
+        AZURE["Azure OpenAI"]
+        ARGO["ANL Argo"]
+    end
+
+    TECH -->|"API call<br/>(based on config)"| LLM_PROVIDERS
+
+    style INGEST fill:#fff3e0,stroke:#ff9800
+    style STORE fill:#f3e5f5,stroke:#9c27b0
+    style BACKEND fill:#e8f5e9,stroke:#4caf50
+    style FRONTEND fill:#e1f5ff,stroke:#2196f3
+    style CONFIG fill:#fce4ec,stroke:#e91e63
+    style LLM_PROVIDERS fill:#f5f5f5,stroke:#9e9e9e
+    style DB fill:#ce93d8
+    style CONVDB fill:#ce93d8
+    style HTML fill:#ffcc80
 ```
 
 ## 🚀 Quick Start

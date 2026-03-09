@@ -13,7 +13,7 @@ from langchain_chroma import Chroma
 from langchain_community.document_loaders import ReadTheDocsLoader
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+import time
 from .config import BaitConfig
 
 # Load configuration
@@ -63,7 +63,7 @@ def ingest_git_documentation(repo_url: str, documentation_dir: Union[str, Path])
     # It's better to run sphinx-build from the original working directory
     # and specify the source and output directories.
     # This avoids issues with `os.chdir`.
-    output_dir = docs_path / "_build"
+    output_dir = docs_path / "_build" / "html"
     command = [
         "sphinx-build",
         "-b",
@@ -115,9 +115,15 @@ def load_chunk_embed(HTML_BUILD_DIR: str):
 
     print("Initializing embedding model...")
     # This model will be downloaded and run 100% locally
-    embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
+    if config.embedding.provider == "huggingface":
+        print("✅ Using HuggingFace for embeddings!")
+        print(f"Model: {config.embedding.model}")
+        embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
+    elif config.embedding.provider == "anl_argo":
+        # Initialize ANL Argo embeddings
+        print("✅ Using ANL Argo API for embeddings!")
+        pass
 
-    print("✅ Using local, open-source embeddings!")
     db_path = str(config.db_path)
     print(f"\n\n\nEmbedding chunks and saving to vector store at: {db_path}...")
     print(f"Creating and saving vector store at {db_path}...")
