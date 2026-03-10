@@ -12,8 +12,9 @@ from git import Repo
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import ReadTheDocsLoader
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import time
+
 from .config import BaitConfig
 
 # Load configuration
@@ -114,15 +115,24 @@ def load_chunk_embed(HTML_BUILD_DIR: str):
     print(f"✅ Split {len(docs)} docs into {len(splits)} chunks.")
 
     print("Initializing embedding model...")
-    # This model will be downloaded and run 100% locally
     if config.embedding.provider == "huggingface":
         print("✅ Using HuggingFace for embeddings!")
         print(f"Model: {config.embedding.model}")
         embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
+
     elif config.embedding.provider == "anl_argo":
         # Initialize ANL Argo embeddings
+        embeddings = OpenAIEmbeddings(
+            model=config.embedding.model,
+            openai_api_base=config.embedding.argo_base_url,
+            openai_api_key=config.embedding.api_key,
+            check_embedding_ctx_length=False,  # Skip length check that tries to load HF tokenizer
+        )
+
         print("✅ Using ANL Argo API for embeddings!")
-        pass
+
+    else:
+        raise ValueError(f"Unknown embedding provider: {config.embedding.provider}")
 
     db_path = str(config.db_path)
     print(f"\n\n\nEmbedding chunks and saving to vector store at: {db_path}...")

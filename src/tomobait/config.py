@@ -66,7 +66,7 @@ class LLMConfig(BaseModel):
         default="GEMINI_API_KEY",
         description="Environment variable name containing the API key",
     )
-    base_url: str = Field(
+    argo_base_url: str = Field(
         default= "https://apps-dev.inside.anl.gov/argoapi/v1/",
         description="Base URL for the LLM API (if applicable)"
     )
@@ -89,18 +89,6 @@ class LLMConfig(BaseModel):
             "If the context is not sufficient, say so. Do not make up answers."
         ),
         description="System message for the documentation expert agent",
-    )
-    anl_api_url: Optional[str] = Field(
-        default=None,
-        description="ANL Argo API endpoint URL (only for api_type='anl_argo')",
-    )
-    anl_user: Optional[str] = Field(
-        default=None,
-        description="ANL username for API requests (only for api_type='anl_argo')",
-    )
-    anl_model: Optional[str] = Field(
-        default=None,
-        description="ANL model name (only for api_type='anl_argo')",
     )
 
 
@@ -125,7 +113,10 @@ class ServerConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     """Configuration for embedding model."""
-
+    api_key: str = Field(
+        default="ecodrea",
+        description="api key itself",
+    )
     provider: str = Field(
         default="huggingface",
         description="Embedding provider: 'huggingface' (local) or 'argo' (ANL Argo API)",
