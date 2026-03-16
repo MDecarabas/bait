@@ -1,5 +1,4 @@
 import os
-import re
 
 import gradio as gr
 import requests
@@ -16,76 +15,12 @@ if config.documentation.git_repos:
     if _docs_path.exists():
         DOCS_DIR = os.path.abspath(_docs_path)
 
-# Global state for current conversation
-current_conversation_id = None
-
-
-def format_response(text):
-    """
-    This function takes the raw text response from the agent and formats it for
-    display in the Gradio interface. It converts image paths to local URLs
-    that Gradio can serve.
-    """
-    # If we don't have a docs directory, we can't serve images.
-    if not DOCS_DIR:
-        return [(text, None)]
-
-    # Find all image paths (markdown or raw)
-    image_paths = re.findall(
-        r"!\[.*?\]\((.*?)\)|([\w\-/.]+\.(?:png|jpg|jpeg|gif|svg))", text
-    )
-
-    # Flatten the list of tuples from findall
-    flat_paths = [item for sublist in image_paths for item in sublist if item]
-
-    # Create a list of tuples (original_text, image_path)
-    # to be used in the Gradio chatbot component
-    output_components = []
-
-    # Start with the full text
-    remaining_text = text
-
-    for path in flat_paths:
-        # We split the text by the image path to insert the image
-        parts = remaining_text.split(path, 1)
-
-        # Add the text before the image
-        if parts[0].strip():
-            # also remove the markdown remnant `![]()`
-            clean_text = re.sub(r"!\[.*?\]\(\)", "", parts[0]).strip()
-            if clean_text:
-                output_components.append((clean_text, None))
-
-        # Add the image
-        # Gradio needs an absolute path to serve the file
-        full_image_path = os.path.join(DOCS_DIR, path)
-        if os.path.exists(full_image_path):
-            output_components.append((None, full_image_path))
-        else:
-            # If the image path is broken, just append the text
-            output_components.append((f"(Image not found: {path})", None))
-
-        # The rest of the text
-        remaining_text = parts[1] if len(parts) > 1 else ""
-
-    # Add any remaining text after the last image
-    if remaining_text.strip():
-        output_components.append((remaining_text.strip(), None))
-
-    # If no images were found, just return the original text
-    if not output_components:
-        return [(text, None)]
-
-    return output_components
-
 
 def chat_func(message, history):
     """
     This is the function that Gradio calls when the user sends a message.
     Uses the modern 'messages' format with role and content.
     """
-    global current_conversation_id
-
     try:
         response = requests.post(BACKEND_URL, json={"query": message})
         response.raise_for_status()
@@ -113,8 +48,6 @@ def new_conversation():
     """
     Start a new conversation.
     """
-    global current_conversation_id
-    current_conversation_id = None
     return []
 
 

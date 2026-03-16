@@ -16,14 +16,6 @@ class ChatQuery(BaseModel):
     query: str
 
 
-class ConfigResponse(BaseModel):
-    config: dict
-
-
-class GenerateConfigRequest(BaseModel):
-    prompt: str
-
-
 @api.post("/chat")
 async def chat_endpoint(chat_query: ChatQuery):
     """

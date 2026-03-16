@@ -2,8 +2,6 @@
 Centralized configuration management for TomoBait, using pydantic-settings.
 """
 
-import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -67,12 +65,12 @@ class LLMConfig(BaseModel):
         description="Environment variable name containing the API key",
     )
     argo_base_url: str = Field(
-        default= "https://apps-dev.inside.anl.gov/argoapi/v1/",
-        description="Base URL for the LLM API (if applicable)"
+        default="https://apps-dev.inside.anl.gov/argoapi/v1/",
+        description="Base URL for the LLM API (if applicable)",
     )
     api_key: str = Field(
-        default="ecodrea",
-        description="api key itself",
+        default="",
+        description="API key for the LLM provider",
     )
     model: str = Field(
         default="gemini-2.5-flash", description="Model name (e.g., gemini-2.5-flash)"
@@ -111,15 +109,17 @@ class ServerConfig(BaseModel):
     frontend_host: str = Field(default="0.0.0.0", description="Frontend server host")
     frontend_port: int = Field(default=8000, description="Frontend server port")
 
+
 class EmbeddingConfig(BaseModel):
     """Configuration for embedding model."""
+
     api_key: str = Field(
-        default="ecodrea",
-        description="api key itself",
+        default="",
+        description="API key for the embedding provider",
     )
     provider: str = Field(
         default="huggingface",
-        description="Embedding provider: 'huggingface' (local) or 'argo' (ANL Argo API)",
+        description="Embedding provider: 'huggingface' or 'anl_argo'",
     )
     model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2",
@@ -177,7 +177,6 @@ class BaitConfig(BaseSettings):
         """Get the resolved documentation output directory path."""
         return self.data_dir / "documentation"
 
-
     @computed_field
     @property
     def db_path(self) -> Path:
@@ -206,23 +205,18 @@ class BaitConfig(BaseSettings):
 # --- Standalone Utility Functions ---
 
 
-def backup_config(path: str = "config.yaml") -> str:
-    """
-    Backup current config file with a timestamp.
-    Returns the backup file path.
-    """
-    config_path = Path(path)
-    if not config_path.exists():
-        return ""
+def get_embeddings(config: BaitConfig):
+    """Create an embedding model instance based on config."""
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_openai import OpenAIEmbeddings
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = config_path.parent / f"{config_path.name}.backup.{timestamp}"
-    shutil.copy2(config_path, backup_path)
-
-    # Keep only the last 5 backups
-    backups = sorted(config_path.parent.glob(f"{config_path.name}.backup.*"))
-    if len(backups) > 5:
-        for old_backup in backups[:-5]:
-            old_backup.unlink()
-
-    return str(backup_path)
+    if config.embedding.provider == "huggingface":
+        return HuggingFaceEmbeddings(model_name=config.embedding.model)
+    elif config.embedding.provider == "anl_argo":
+        return OpenAIEmbeddings(
+            model=config.embedding.model,
+            openai_api_base=config.embedding.argo_base_url,
+            openai_api_key=config.embedding.api_key,
+            check_embedding_ctx_length=False,
+        )
+    raise ValueError(f"Unknown embedding provider: {config.embedding.provider}")

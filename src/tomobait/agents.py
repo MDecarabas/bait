@@ -36,17 +36,17 @@ query_documentation_tool_dict = {
 if config.llm.provider == "anl_argo":
     # ANL Argo doesn't use API keys, but requires URL, user, and model
 
-        # Build LLM config
-        llm_config_dict = {
-            "api_type": config.llm.api_type,
-            "model": config.llm.model,
-            "api_key": config.llm.api_key,
-            "tools": [query_documentation_tool_dict],
-        }
+    # Build LLM config
+    llm_config_dict = {
+        "api_type": config.llm.api_type,
+        "model": config.llm.model,
+        "api_key": config.llm.api_key,
+        "tools": [query_documentation_tool_dict],
+    }
 
-        llm_config_dict["base_url"] = config.llm.base_url
+    llm_config_dict["base_url"] = config.llm.argo_base_url
 
-        llm_config = LLMConfig(config_list=[llm_config_dict])
+    llm_config = LLMConfig(config_list=[llm_config_dict])
 
 else:
     # Standard API key-based providers (Gemini, OpenAI, Anthropic, Azure)

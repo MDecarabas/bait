@@ -11,11 +11,9 @@ from typing import Union
 from git import Repo
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import ReadTheDocsLoader
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .config import BaitConfig
+from .config import BaitConfig, get_embeddings
 
 # Load configuration
 config = BaitConfig()
@@ -34,7 +32,7 @@ def ingest_git_documentation(repo_url: str, documentation_dir: Union[str, Path])
     documentation_dir = Path(documentation_dir)
 
     # Get the last part and remove the specific suffix
-    repo_name = repo_url.split('/')[-1].removesuffix('.git')
+    repo_name = repo_url.split("/")[-1].removesuffix(".git")
     repo_dir = documentation_dir / repo_name
 
     # --- 1. Clone or Pull Repository ---
@@ -115,28 +113,14 @@ def load_chunk_embed(HTML_BUILD_DIR: str):
     print(f"✅ Split {len(docs)} docs into {len(splits)} chunks.")
 
     print("Initializing embedding model...")
-    if config.embedding.provider == "huggingface":
-        print("✅ Using HuggingFace for embeddings!")
-        print(f"Model: {config.embedding.model}")
-        embeddings = HuggingFaceEmbeddings(model_name=config.embedding.model)
-
-    elif config.embedding.provider == "anl_argo":
-        # Initialize ANL Argo embeddings
-        embeddings = OpenAIEmbeddings(
-            model=config.embedding.model,
-            openai_api_base=config.embedding.argo_base_url,
-            openai_api_key=config.embedding.api_key,
-            check_embedding_ctx_length=False,  # Skip length check that tries to load HF tokenizer
-        )
-
-        print("✅ Using ANL Argo API for embeddings!")
-
-    else:
-        raise ValueError(f"Unknown embedding provider: {config.embedding.provider}")
+    embeddings = get_embeddings(config)
+    print(
+        f"✅ Using {config.embedding.provider} for embeddings"
+        f" (model: {config.embedding.model})"
+    )
 
     db_path = str(config.db_path)
-    print(f"\n\n\nEmbedding chunks and saving to vector store at: {db_path}...")
-    print(f"Creating and saving vector store at {db_path}...")
+    print(f"Embedding chunks and saving to vector store at: {db_path}...")
     if Path(db_path).exists():
         vectorstore = Chroma(persist_directory=db_path, embedding_function=embeddings)
         vectorstore.add_documents(splits)
