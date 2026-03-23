@@ -2,7 +2,8 @@ import sys
 
 from langchain_chroma import Chroma
 
-from .config import BaitConfig, get_embeddings
+from .config import BaitConfig
+from .utils import get_embeddings
 
 # Load configuration
 config = BaitConfig()

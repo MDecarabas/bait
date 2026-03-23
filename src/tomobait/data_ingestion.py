@@ -13,7 +13,8 @@ from langchain_chroma import Chroma
 from langchain_community.document_loaders import ReadTheDocsLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .config import BaitConfig, get_embeddings
+from .config import BaitConfig
+from .utils import get_embeddings
 
 # Load configuration
 config = BaitConfig()

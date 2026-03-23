@@ -139,6 +139,20 @@ class EmbeddingConfig(BaseModel):
     )
 
 
+class BITSConfig(BaseModel):
+    """Configuration for BITS instrument integration."""
+
+    enabled: bool = Field(default=True, description="Enable BITS integration")
+    path: str = Field(default="", description="Absolute path to the BITS root folder")
+    package_name: str = Field(
+        default="", description="Python package name (e.g., 'tomo_2bm')"
+    )
+    src_subdir: str = Field(
+        default="src",
+        description="Subdirectory containing Python packages",
+    )
+
+
 class BaitConfig(BaseSettings):
     """Main configuration for TomoBait, loaded from config.yaml."""
 
@@ -156,12 +170,14 @@ class BaitConfig(BaseSettings):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
+    bits: BITSConfig = Field(default_factory=BITSConfig)
 
     def model_post_init(self, __context) -> None:
         """Create all necessary directories after the model is initialized."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.docs_output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.chat_history_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Computed Path Properties ---
 
@@ -183,6 +199,18 @@ class BaitConfig(BaseSettings):
         """Get the resolved ChromaDB path."""
         return self.data_dir / "chroma_db"
 
+    @computed_field
+    @property
+    def chat_history_dir(self) -> Path:
+        """Get the resolved chat history directory path."""
+        return self.data_dir / "chat_history"
+
+    @computed_field
+    @property
+    def bits_skills_dir(self) -> Path:
+        """Get the BITS root folder where skills files are written."""
+        return Path(self.bits.path) if self.bits.path else Path(".")
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -200,23 +228,3 @@ class BaitConfig(BaseSettings):
             dotenv_settings,
             file_secret_settings,
         )
-
-
-# --- Standalone Utility Functions ---
-
-
-def get_embeddings(config: BaitConfig):
-    """Create an embedding model instance based on config."""
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_openai import OpenAIEmbeddings
-
-    if config.embedding.provider == "huggingface":
-        return HuggingFaceEmbeddings(model_name=config.embedding.model)
-    elif config.embedding.provider == "anl_argo":
-        return OpenAIEmbeddings(
-            model=config.embedding.model,
-            openai_api_base=config.embedding.argo_base_url,
-            openai_api_key=config.embedding.api_key,
-            check_embedding_ctx_length=False,
-        )
-    raise ValueError(f"Unknown embedding provider: {config.embedding.provider}")
