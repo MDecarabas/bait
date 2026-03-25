@@ -1,28 +1,70 @@
-import re
-from typing import Annotated
+"""Agent orchestration using LangGraph + Anthropic SDK."""
 
-import autogen
-from dotenv import load_dotenv
+from typing import TypedDict
+
+from langgraph.graph import END, StateGraph
 
 from .config import BaitConfig
 from .retriever import get_documentation_retriever
-from .utils import build_llm_config
+from .utils import build_llm_client
 
-load_dotenv()
-
-# Load configuration
+# --- Configuration & Client ---
 config = BaitConfig()
+client = build_llm_client(config)
+retriever = get_documentation_retriever()
 
-# --- 1. Shared LLM Config (no tools) ---
-base_llm_config = build_llm_config(config)
 
-# --- 2. Doc Expert LLM Config (with query_documentation tool) ---
-query_documentation_tool_dict = {
-    "type": "function",
-    "function": {
+# --- LangGraph State ---
+class AgentState(TypedDict):
+    question: str
+    answer: str
+    route: str
+
+
+# --- Router ---
+
+ROUTER_SYSTEM_PROMPT = """\
+You are a question classifier for a beamline instrument system.
+
+Classify the user's question into exactly one category:
+- "documentation": Questions about beamline documentation, experimental procedures, \
+how-to guides, configuration, or general usage.
+- "device": Questions about ophyd devices, EPICS PVs, signals, motors, detectors, \
+shutters, scan parameters, Bluesky plans, or hardware interaction.
+
+Respond with ONLY the category name, nothing else."""
+
+
+def router_node(state: AgentState) -> dict:
+    """Use the LLM to classify the question and decide which agent to use."""
+    response = client.messages.create(
+        model=config.llm.model,
+        max_tokens=50,
+        system=ROUTER_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": state["question"]}],
+    )
+    route = response.content[0].text.strip().lower()
+    # Default to documentation if the LLM returns something unexpected
+    if route not in ("documentation", "device"):
+        route = "documentation"
+    print(f"Router: classified as '{route}'")
+    return {"route": route}
+
+
+def route_decision(state: AgentState) -> str:
+    """Conditional edge: dispatch to the correct agent node."""
+    if state["route"] == "device":
+        return "bits_agent"
+    return "doc_agent"
+
+
+# --- Documentation Agent ---
+
+DOC_TOOLS = [
+    {
         "name": "query_documentation",
         "description": "Search the project documentation for a given query.",
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
@@ -32,47 +74,12 @@ query_documentation_tool_dict = {
             },
             "required": ["query"],
         },
-    },
-}
-
-# Clone the base config and inject the tool
-doc_llm_config_list = []
-for entry in base_llm_config.config_list:
-    d = dict(entry)
-    d["tools"] = [query_documentation_tool_dict]
-    doc_llm_config_list.append(d)
-
-doc_llm_config = autogen.LLMConfig(config_list=doc_llm_config_list)
-
-# --- 3. Load Retriever ---
-retriever = get_documentation_retriever()
+    }
+]
 
 
-# --- 4. Doc Expert Agents ---
-technician_agent = autogen.AssistantAgent(
-    "doc_expert", llm_config=doc_llm_config, system_message=config.llm.system_message
-)
-
-worker_agent = autogen.UserProxyAgent(
-    "tool_worker",
-    llm_config=False,
-    human_input_mode="NEVER",
-    is_termination_msg=lambda msg: not msg.get("tool_calls"),
-    code_execution_config=False,
-)
-
-# captain_agent = autogen.CaptainAgent(
-#     "captain",
-
-
-@worker_agent.register_for_execution(name="query_documentation")
-def query_documentation(
-    query: Annotated[str, "The search query for the documentation"],
-) -> str:
-    """
-    A tool that takes a user's query, retrieves relevant
-    document chunks, and returns them as a single string with source links.
-    """
+def query_documentation(query: str) -> str:
+    """Execute the documentation retrieval tool."""
     print(f"\n--- TOOL: Querying for '{query}' ---")
 
     results = retriever.invoke(query)
@@ -115,36 +122,70 @@ def query_documentation(
     return context_str
 
 
-def run_agent_chat(user_question: str) -> str:
-    """
-    Runs a chat between doc agents to answer a documentation question.
-    """
+def doc_agent_node(state: AgentState) -> dict:
+    """Documentation expert agent with tool use loop."""
     print("Starting doc agent chat...")
-    chat_result = worker_agent.initiate_chat(
-        recipient=technician_agent,
-        message=(
-            f"Please answer this question: '{user_question}'. "
-            "You *must* use the 'query_documentation' tool to find the "
-            "relevant context first. "
-            "Provide a concise but complete answer (2-3 paragraphs). "
-            "If the question asks 'how to' do something, provide step-by-step "
-            "instructions as a numbered list. "
-            "Include relevant source links from the context at the end of "
-            "your response."
-        ),
+
+    prompt = (
+        f"Please answer this question: '{state['question']}'. "
+        "You *must* use the 'query_documentation' tool to find the "
+        "relevant context first. "
+        "Provide a concise but complete answer (2-3 paragraphs). "
+        "If the question asks 'how to' do something, provide step-by-step "
+        "instructions as a numbered list. "
+        "Include relevant source links from the context at the end of "
+        "your response."
     )
 
-    final_answer = chat_result.summary
-    if final_answer:
-        print("\n--- FINAL ANSWER ---")
-        print(final_answer)
-        return final_answer
-    return "Sorry, I couldn't find an answer."
+    messages = [{"role": "user", "content": prompt}]
+
+    while True:
+        response = client.messages.create(
+            model=config.llm.model,
+            max_tokens=4096,
+            system=config.llm.system_message,
+            messages=messages,
+            tools=DOC_TOOLS,
+        )
+
+        if response.stop_reason == "end_turn":
+            final_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    final_text += block.text
+            print("\n--- FINAL ANSWER ---")
+            print(final_text)
+            return {"answer": final_text or "Sorry, I couldn't find an answer."}
+
+        if response.stop_reason == "tool_use":
+            # Append the assistant's response (with tool_use blocks)
+            messages.append({"role": "assistant", "content": response.content})
+
+            # Execute each tool call and collect results
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = query_documentation(block.input["query"])
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        }
+                    )
+
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            # Unexpected stop reason — return whatever text we have
+            final_text = ""
+            for block in response.content:
+                if block.type == "text":
+                    final_text += block.text
+            return {"answer": final_text or "Sorry, I couldn't find an answer."}
 
 
-# --- 5. BITS Device Expert Agent ---
+# --- BITS Device Expert Agent ---
 
-# Load device_skills.md if it exists
 _device_skills_content = ""
 _skills_path = config.bits_skills_dir / "device_skills.md"
 if _skills_path.is_file():
@@ -169,62 +210,54 @@ attributes.
 --- END DEVICE REFERENCE ---
 """.format(skills=(_device_skills_content or "(no device skills loaded)"))
 
-bits_device_expert = autogen.AssistantAgent(
-    "bits_device_expert",
-    llm_config=base_llm_config,
-    system_message=BITS_SYSTEM_PROMPT,
-)
 
-bits_worker = autogen.UserProxyAgent(
-    "bits_worker",
-    llm_config=False,
-    human_input_mode="NEVER",
-    is_termination_msg=lambda msg: True,
-    code_execution_config=False,
-)
-
-
-def run_bits_chat(user_question: str) -> str:
-    """
-    Runs a chat with the BITS device expert to answer a device question.
-    """
+def bits_agent_node(state: AgentState) -> dict:
+    """BITS device expert agent (knowledge-only, no tools yet)."""
     print("Starting BITS device agent chat...")
-    chat_result = bits_worker.initiate_chat(
-        recipient=bits_device_expert,
-        message=user_question,
+
+    response = client.messages.create(
+        model=config.llm.model,
+        max_tokens=4096,
+        system=BITS_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": state["question"]}],
     )
 
-    final_answer = chat_result.summary
-    if final_answer:
+    final_text = ""
+    for block in response.content:
+        if block.type == "text":
+            final_text += block.text
+
+    if final_text:
         print("\n--- BITS ANSWER ---")
-        print(final_answer)
-        return final_answer
-    return "Sorry, I couldn't find an answer about that device."
+        print(final_text)
+
+    fallback = "Sorry, I couldn't find an answer about that device."
+    return {"answer": final_text or fallback}
 
 
-# --- 6. Question Router ---
+# --- Build LangGraph ---
 
-# Keywords that indicate a device-related question
-_DEVICE_KEYWORDS = re.compile(
-    r"\b("
-    r"device|signal|pv\b|epics|ophyd|bluesky|motor|detector|shutter|"
-    r"\.get\(\)|\.put\(|prefix|suffix|component|"
-    r"scan[_ ]?parameter|rotation[_ ]?start|exposure[_ ]?time|"
-    r"tomoscan|tomooptics|mctoptics"
-    r")\b",
-    re.IGNORECASE,
-)
+graph_builder = StateGraph(AgentState)
+
+graph_builder.add_node("router", router_node)
+graph_builder.add_node("doc_agent", doc_agent_node)
+graph_builder.add_node("bits_agent", bits_agent_node)
+
+graph_builder.set_entry_point("router")
+graph_builder.add_conditional_edges("router", route_decision)
+graph_builder.add_edge("doc_agent", END)
+graph_builder.add_edge("bits_agent", END)
+
+graph = graph_builder.compile()
+
+
+# --- Public API (unchanged interface) ---
 
 
 def route_question(user_question: str) -> str:
-    """Route user question to the appropriate agent.
+    """Route user question to the appropriate agent via LangGraph.
 
-    Uses keyword matching to decide between the device expert
-    and the documentation expert.
+    This is the main entry point called by the FastAPI backend.
     """
-    if _device_skills_content and _DEVICE_KEYWORDS.search(user_question):
-        print("Router: dispatching to BITS device expert")
-        return run_bits_chat(user_question)
-    else:
-        print("Router: dispatching to documentation expert")
-        return run_agent_chat(user_question)
+    result = graph.invoke({"question": user_question, "answer": "", "route": ""})
+    return result["answer"]

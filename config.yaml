@@ -26,7 +26,7 @@ llm:
   api_key: ecodrea
   model: claudeopus46
   api_type: openai
-  argo_base_url: https://apps-dev.inside.anl.gov/argoapi/v1/
+  argo_base_url: https://apps-dev.inside.anl.gov/argoapi
   system_message: 'You are an expert on this project''s documentation. When answering
     questions: 1. Answer based *only* on the context from your ''query_documentation''
     tool 2. Provide concise but complete responses (2-3 paragraphs) 3. For "how to"

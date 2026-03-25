@@ -22,25 +22,26 @@ def get_embeddings(config: BaitConfig):
     raise ValueError(f"Unknown embedding provider: {config.embedding.provider}")
 
 
-def build_llm_config(config: BaitConfig):
-    """Build an AG2 LLMConfig dict list (without tools).
+def build_llm_client(config: BaitConfig):
+    """Build an Anthropic client based on config.
 
-    Returns an autogen LLMConfig object. Caller can inject tools after.
+    For ANL Argo, uses the Argo base URL with the user's ANL username as api_key.
+    For direct Anthropic, reads the API key from the environment variable
+    specified in config.llm.provider.
     """
-    from autogen import LLMConfig
 
-    llm_config_dict: dict = {
-        "api_type": config.llm.api_type,
-        "model": config.llm.model,
-    }
+    if config.llm.api_type == "anthropic":
+        from anthropic import Anthropic
 
-    if config.llm.provider == "anl_argo":
-        llm_config_dict["api_key"] = config.llm.api_key
-        llm_config_dict["base_url"] = config.llm.argo_base_url
-    else:
-        api_key = os.getenv(config.llm.provider)
-        if not api_key:
-            raise RuntimeError(f"{config.llm.provider} environment variable not set.")
-        llm_config_dict["api_key"] = api_key
+        return Anthropic(
+            api_key=config.llm.api_key,
+            base_url=config.llm.argo_base_url,
+        )
 
-    return LLMConfig(config_list=[llm_config_dict])
+    elif config.llm.api_type == "openai":
+        from openai import OpenAI
+        return OpenAI(
+            api_key=config.llm.api_key,
+            base_url=config.llm.argo_base_url,
+        )
+
