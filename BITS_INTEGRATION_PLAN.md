@@ -317,3 +317,60 @@ bits = ["ophyd", "apsbits"]
 - **Device safety limits:** For production use, the `set_device` tool should check software limits before moving motors. The current plan relies on EPICS soft limits and LLM-level caution.
 - **Multi-BITS support:** The config supports one BITS installation. Could be extended to multiple beamlines.
 - **oregistry integration:** If TomoBait runs in the same Python environment as a Bluesky session, it could use oregistry directly instead of re-instantiating devices. This would be a future optimization.
+
+
+  Prompt for /skill-creator:
+
+  ▎ Create a skill called ophyd-device-control that enables an agent to fully control any ophyd EPICS device in any BITS (Bluesky Instrument for Tomo Scanning) package from an IPython session. The skill should NOT
+  hardcode any specific device names, signals, or PV prefixes — instead it should teach the agent how to dynamically discover and interact with whatever devices are loaded.
+
+  ▎ What it should cover:
+
+  ▎ 1. Device Discovery — How to find what devices exist:
+  ▎   - Access oregistry from apsbits.core.instrument_init to list all registered devices
+  ▎   - Devices are defined in configs/devices.yml (Guarneri-style YAML: class path, name, prefix, labels)
+  ▎   - After startup, device variables are available directly in the IPython namespace
+  ▎ 2. Device Exploration — How to inspect any device's structure without knowing it in advance:
+  ▎   - device.summary() for human-readable overview
+  ▎   - device.component_names to list all signal attributes
+  ▎   - device.walk_signals() to recursively walk all signals including nested sub-devices, getting name, PV, kind, connection status
+  ▎   - device.prefix for the EPICS PV prefix
+  ▎   - signal.pvname for the full EPICS PV name
+  ▎   - device._sig_attrs to filter signals by kind (config/normal/omitted/hinted)
+  ▎   - device.__class__.__mro__ to understand the inheritance chain
+  ▎ 3. Reading Values — Interactive only, no Bluesky plans:
+  ▎   - device.signal_name.get() for single values
+  ▎   - device.signal_name.get(as_string=True) for string-type PVs
+  ▎   - device.read() for all kind="normal" signals
+  ▎   - device.read_configuration() for all kind="config" signals
+  ▎   - device.describe() and device.describe_configuration() for metadata
+  ▎ 4. Setting Values — Interactive only:
+  ▎   - device.signal_name.put(value) — synchronous, blocks until acknowledged
+  ▎   - device.signal_name.put(value, wait=False) — fire-and-forget
+  ▎   - device.signal_name.set(value) — returns Status object for async tracking
+  ▎ 5. Connection Checking:
+  ▎   - device.connected — True only if ALL signals connected
+  ▎   - device.signal_name.connected — individual signal check
+  ▎   - device.wait_for_connection(timeout=5.0) — blocks until connected or raises TimeoutError
+  ▎   - Walk signals to find specifically which ones are disconnected
+  ▎ 6. Monitoring/Subscriptions:
+  ▎   - signal.subscribe(callback) returns a callback ID
+  ▎   - signal.unsubscribe(cbid) to stop
+  ▎   - signal.clear_sub(signal.SUB_VALUE) to clear all
+  ▎ 7. Important ophyd concepts the agent should understand:
+  ▎   - Signal kind values: "config" (read once), "normal" (read each scan), "omitted" (not auto-read), "hinted" (primary data)
+  ▎   - .read() returns normal+hinted, .read_configuration() returns config signals
+  ▎   - Omitted signals must be accessed directly via .get()
+  ▎   - EpicsSignal is read-write, EpicsSignalRO is read-only
+  ▎   - string=True signals represent enum/text PVs
+  ▎   - Device hierarchy via inheritance — child classes can override parent signal kinds
+  ▎   - PV naming: {device.prefix}{Component_suffix}
+
+  ▎ Critical constraints:
+  ▎ - This skill is for INTERACTIVE ophyd control only — absolutely NO Bluesky plan syntax (yield from, bps.mv, bps.rd, @with_registry, RunEngine)
+  ▎ - Must be generic — no hardcoded device names, signal names, or PV prefixes
+  ▎ - The agent should always start by discovering what devices exist and exploring their structure before trying to interact
+  ▎ - All introspection works WITHOUT a live EPICS connection; only .get(), .put(), and .connected require one
+
+  ▎ When to trigger: When the user mentions ophyd, EPICS, PVs, device signals, .get(), .put(), .read(), .connected, checking values, setting parameters, device status, walk signals, or any beamline device
+  interaction.

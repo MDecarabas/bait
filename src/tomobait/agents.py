@@ -61,6 +61,9 @@ worker_agent = autogen.UserProxyAgent(
     code_execution_config=False,
 )
 
+# captain_agent = autogen.CaptainAgent(
+#     "captain",
+
 
 @worker_agent.register_for_execution(name="query_documentation")
 def query_documentation(

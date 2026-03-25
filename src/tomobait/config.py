@@ -142,14 +142,9 @@ class EmbeddingConfig(BaseModel):
 class BITSConfig(BaseModel):
     """Configuration for BITS instrument integration."""
 
-    enabled: bool = Field(default=True, description="Enable BITS integration")
     path: str = Field(default="", description="Absolute path to the BITS root folder")
-    package_name: str = Field(
+    instrument_name: str = Field(
         default="", description="Python package name (e.g., 'tomo_2bm')"
-    )
-    src_subdir: str = Field(
-        default="src",
-        description="Subdirectory containing Python packages",
     )
 
 

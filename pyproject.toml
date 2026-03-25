@@ -47,8 +47,6 @@ dependencies = [
 [project.scripts]
 start-backend = "tomobait.app:main"
 start-frontend = "tomobait.frontend:main"
-init-bits-skills = "tomobait.skills:main"
-
 
 [tool.setuptools.packages.find]
 where = ["src"]
