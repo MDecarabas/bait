@@ -1,8 +1,8 @@
 """Shared utility/factory functions for TomoBait."""
 
-import os
-
 from .config import BaitConfig
+
+_client_cache: dict[tuple, object] = {}
 
 
 def get_embeddings(config: BaitConfig):
@@ -22,26 +22,36 @@ def get_embeddings(config: BaitConfig):
     raise ValueError(f"Unknown embedding provider: {config.embedding.provider}")
 
 
-def build_llm_client(config: BaitConfig):
-    """Build an Anthropic client based on config.
+def build_llm_client(llm_settings: dict):
+    """Build an LLM client from resolved per-agent settings.
 
-    For ANL Argo, uses the Argo base URL with the user's ANL username as api_key.
-    For direct Anthropic, reads the API key from the environment variable
-    specified in config.llm.provider.
+    ``llm_settings`` is a dict with keys: api_type, api_key, argo_base_url.
+    Clients are cached so agents sharing the same provider reuse one instance.
     """
+    cache_key = (
+        llm_settings["api_type"],
+        llm_settings["api_key"],
+        llm_settings["argo_base_url"],
+    )
+    if cache_key in _client_cache:
+        return _client_cache[cache_key]
 
-    if config.llm.api_type == "anthropic":
+    if llm_settings["api_type"] == "anthropic":
         from anthropic import Anthropic
 
-        return Anthropic(
-            api_key=config.llm.api_key,
-            base_url=config.llm.argo_base_url,
+        client = Anthropic(
+            api_key=llm_settings["api_key"],
+            base_url=llm_settings["argo_base_url"],
         )
-
-    elif config.llm.api_type == "openai":
+    elif llm_settings["api_type"] == "openai":
         from openai import OpenAI
-        return OpenAI(
-            api_key=config.llm.api_key,
-            base_url=config.llm.argo_base_url,
-        )
 
+        client = OpenAI(
+            api_key=llm_settings["api_key"],
+            base_url=llm_settings["argo_base_url"],
+        )
+    else:
+        raise ValueError(f"Unknown api_type: {llm_settings['api_type']}")
+
+    _client_cache[cache_key] = client
+    return client

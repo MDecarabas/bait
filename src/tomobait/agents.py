@@ -1,4 +1,4 @@
-"""Agent orchestration using LangGraph + Anthropic SDK."""
+"""Agent orchestration using LangGraph."""
 
 from typing import TypedDict
 
@@ -8,10 +8,17 @@ from .config import BaitConfig
 from .retriever import get_documentation_retriever
 from .utils import build_llm_client
 
-# --- Configuration & Client ---
+# --- Configuration & Per-Agent Clients ---
 config = BaitConfig()
-client = build_llm_client(config)
 retriever = get_documentation_retriever()
+
+_router_settings = config.get_agent_llm_settings("router")
+_doc_settings = config.get_agent_llm_settings("doc_agent")
+_bits_settings = config.get_agent_llm_settings("bits_agent")
+
+router_client = build_llm_client(_router_settings)
+doc_client = build_llm_client(_doc_settings)
+bits_client = build_llm_client(_bits_settings)
 
 
 # --- LangGraph State ---
@@ -23,24 +30,13 @@ class AgentState(TypedDict):
 
 # --- Router ---
 
-ROUTER_SYSTEM_PROMPT = """\
-You are a question classifier for a beamline instrument system.
-
-Classify the user's question into exactly one category:
-- "documentation": Questions about beamline documentation, experimental procedures, \
-how-to guides, configuration, or general usage.
-- "device": Questions about ophyd devices, EPICS PVs, signals, motors, detectors, \
-shutters, scan parameters, Bluesky plans, or hardware interaction.
-
-Respond with ONLY the category name, nothing else."""
-
 
 def router_node(state: AgentState) -> dict:
     """Use the LLM to classify the question and decide which agent to use."""
-    response = client.messages.create(
-        model=config.llm.model,
-        max_tokens=50,
-        system=ROUTER_SYSTEM_PROMPT,
+    response = router_client.messages.create(
+        model=_router_settings["model"],
+        max_tokens=config.agents.router.max_tokens,
+        system=config.agents.router.system_prompt,
         messages=[{"role": "user", "content": state["question"]}],
     )
     route = response.content[0].text.strip().lower()
@@ -140,10 +136,10 @@ def doc_agent_node(state: AgentState) -> dict:
     messages = [{"role": "user", "content": prompt}]
 
     while True:
-        response = client.messages.create(
-            model=config.llm.model,
-            max_tokens=4096,
-            system=config.llm.system_message,
+        response = doc_client.messages.create(
+            model=_doc_settings["model"],
+            max_tokens=config.agents.doc_agent.max_tokens,
+            system=config.agents.doc_agent.system_prompt,
             messages=messages,
             tools=DOC_TOOLS,
         )
@@ -194,31 +190,24 @@ if _skills_path.is_file():
 else:
     print(f"Warning: device_skills.md not found at {_skills_path}")
 
-BITS_SYSTEM_PROMPT = """\
-You are an expert on BITS (Beamline Instrument and Tool Suite) devices, \
-ophyd signals, EPICS PVs, scan parameters, and Bluesky plans for this beamline.
-
-Answer questions about devices, their signals, PV names, scan configuration, \
-and how to interact with hardware using ophyd and Bluesky.
-
-Base your answers on the device reference below. If the reference does not \
-contain enough information, say so. Do not invent PV names or device \
-attributes.
-
---- DEVICE REFERENCE ---
-{skills}
---- END DEVICE REFERENCE ---
-""".format(skills=(_device_skills_content or "(no device skills loaded)"))
+# Build effective BITS system prompt: config prompt + skills reference
+_bits_system_prompt = config.agents.bits_agent.system_prompt
+if _device_skills_content:
+    _bits_system_prompt += (
+        "\n\n--- DEVICE REFERENCE ---\n"
+        + _device_skills_content
+        + "\n--- END DEVICE REFERENCE ---"
+    )
 
 
 def bits_agent_node(state: AgentState) -> dict:
     """BITS device expert agent (knowledge-only, no tools yet)."""
     print("Starting BITS device agent chat...")
 
-    response = client.messages.create(
-        model=config.llm.model,
-        max_tokens=4096,
-        system=BITS_SYSTEM_PROMPT,
+    response = bits_client.messages.create(
+        model=_bits_settings["model"],
+        max_tokens=config.agents.bits_agent.max_tokens,
+        system=_bits_system_prompt,
         messages=[{"role": "user", "content": state["question"]}],
     )
 

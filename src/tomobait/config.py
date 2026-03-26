@@ -58,7 +58,7 @@ class RetrieverConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """Configuration for the LLM and agents."""
+    """Default LLM connection settings (shared by all agents unless overridden)."""
 
     provider: str = Field(
         default="GEMINI_API_KEY",
@@ -78,15 +78,79 @@ class LLMConfig(BaseModel):
     api_type: str = Field(
         default="google", description="API type (google, openai, etc.)"
     )
-    system_message: str = Field(
-        default=(
-            "You are an expert on this project's documentation. "
-            "A user will ask a question. Your 'query_documentation' tool "
-            "will provide you with the *only* relevant context. "
-            "**You must answer the user's question based *only* on that context.** "
-            "If the context is not sufficient, say so. Do not make up answers."
-        ),
-        description="System message for the documentation expert agent",
+
+
+class AgentConfig(BaseModel):
+    """Per-agent configuration: prompt, token limit, and optional LLM overrides."""
+
+    system_prompt: str = Field(description="System prompt for this agent")
+    max_tokens: int = Field(default=4096, description="Max tokens for LLM response")
+    model: Optional[str] = Field(
+        default=None, description="Override model (falls back to llm.model)"
+    )
+    api_type: Optional[str] = Field(
+        default=None, description="Override api_type (falls back to llm.api_type)"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="Override api_key (falls back to llm.api_key)"
+    )
+    argo_base_url: Optional[str] = Field(
+        default=None,
+        description="Override base URL (falls back to llm.argo_base_url)",
+    )
+
+
+class AgentsConfig(BaseModel):
+    """Configuration for all agents in the system."""
+
+    router: AgentConfig = Field(
+        default_factory=lambda: AgentConfig(
+            system_prompt=(
+                "You are a question classifier for a beamline instrument system.\n\n"
+                "Classify the user's question into exactly one category:\n"
+                '- "documentation": Questions about beamline documentation, '
+                "experimental procedures, how-to guides, configuration, "
+                "or general usage.\n"
+                '- "device": Questions about ophyd devices, EPICS PVs, signals, '
+                "motors, detectors, shutters, scan parameters, Bluesky plans, "
+                "or hardware interaction.\n\n"
+                "Respond with ONLY the category name, nothing else."
+            ),
+            max_tokens=50,
+        )
+    )
+    doc_agent: AgentConfig = Field(
+        default_factory=lambda: AgentConfig(
+            system_prompt=(
+                "You are an expert on this project's documentation. "
+                "When answering questions: "
+                "1. Answer based *only* on the context from your "
+                "'query_documentation' tool. "
+                "2. Provide concise but complete responses (2-3 paragraphs). "
+                "3. For 'how to' questions, provide step-by-step numbered "
+                "instructions. "
+                "4. Include relevant source links from the context. "
+                "5. If the context is insufficient, say so. "
+                "Do not make up answers."
+            ),
+            max_tokens=4096,
+        )
+    )
+    bits_agent: AgentConfig = Field(
+        default_factory=lambda: AgentConfig(
+            system_prompt=(
+                "You are an expert on BITS (Beamline Instrument and Tool Suite) "
+                "devices, ophyd signals, EPICS PVs, scan parameters, and Bluesky "
+                "plans for this beamline.\n\n"
+                "Answer questions about devices, their signals, PV names, scan "
+                "configuration, and how to interact with hardware using ophyd "
+                "and Bluesky.\n\n"
+                "Base your answers on the device reference below. If the reference "
+                "does not contain enough information, say so. Do not invent PV "
+                "names or device attributes."
+            ),
+            max_tokens=4096,
+        )
     )
 
 
@@ -163,6 +227,7 @@ class BaitConfig(BaseSettings):
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig)
     text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     bits: BITSConfig = Field(default_factory=BITSConfig)
@@ -205,6 +270,19 @@ class BaitConfig(BaseSettings):
     def bits_skills_dir(self) -> Path:
         """Get the BITS root folder where skills files are written."""
         return Path(self.bits.path) if self.bits.path else Path(".")
+
+    def get_agent_llm_settings(self, agent_name: str) -> dict:
+        """Return resolved LLM settings for a given agent.
+
+        Merges agent-specific overrides onto the global llm config.
+        """
+        agent_config: AgentConfig = getattr(self.agents, agent_name)
+        return {
+            "model": agent_config.model or self.llm.model,
+            "api_type": agent_config.api_type or self.llm.api_type,
+            "api_key": agent_config.api_key or self.llm.api_key,
+            "argo_base_url": agent_config.argo_base_url or self.llm.argo_base_url,
+        }
 
     @classmethod
     def settings_customise_sources(
