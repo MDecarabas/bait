@@ -40,6 +40,12 @@ dependencies = [
     "langchain>=1.2.13",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/mdecarabas/tomo-bait"
 "Bug Tracker" = "https://github.com/mdecarabas/tomo-bait/issues"
@@ -50,3 +56,7 @@ start-frontend = "tomobait.frontend:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
