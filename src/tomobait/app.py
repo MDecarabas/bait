@@ -21,6 +21,14 @@ class ChatQuery(BaseModel):
     query: str
 
 
+def _safe_chat_path(chat_history_dir, chat_id: str):
+    """Resolve a chat file path, guarding against path traversal."""
+    filepath = (chat_history_dir / f"{chat_id}.json").resolve()
+    if not filepath.is_relative_to(chat_history_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid chat ID")
+    return filepath
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -86,15 +94,14 @@ async def save_chat(request: SaveChatRequest):
 
     if request.id:
         chat_id = request.id
-        # Find existing file to update
-        existing = list(config.chat_history_dir.glob(f"{chat_id}.json"))
-        if existing:
-            data = json.loads(existing[0].read_text())
+        filepath = _safe_chat_path(config.chat_history_dir, chat_id)
+        if filepath.exists():
+            data = json.loads(filepath.read_text())
             data["title"] = title
             data["updated_at"] = now
             data["message_count"] = len(request.messages)
             data["messages"] = [m.model_dump() for m in request.messages]
-            existing[0].write_text(json.dumps(data, indent=2))
+            filepath.write_text(json.dumps(data, indent=2))
             return {"id": chat_id, "title": title}
     else:
         chat_id = _make_chat_id(title)
@@ -107,7 +114,7 @@ async def save_chat(request: SaveChatRequest):
         "message_count": len(request.messages),
         "messages": [m.model_dump() for m in request.messages],
     }
-    filepath = config.chat_history_dir / f"{chat_id}.json"
+    filepath = _safe_chat_path(config.chat_history_dir, chat_id)
     filepath.write_text(json.dumps(data, indent=2))
     return {"id": chat_id, "title": title}
 
@@ -134,7 +141,7 @@ async def list_chats():
 async def load_chat(chat_id: str):
     """Load a specific conversation with full messages."""
     config = BaitConfig()
-    filepath = config.chat_history_dir / f"{chat_id}.json"
+    filepath = _safe_chat_path(config.chat_history_dir, chat_id)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Chat not found")
     return json.loads(filepath.read_text())
@@ -144,7 +151,7 @@ async def load_chat(chat_id: str):
 async def delete_chat(chat_id: str):
     """Delete a saved conversation."""
     config = BaitConfig()
-    filepath = config.chat_history_dir / f"{chat_id}.json"
+    filepath = _safe_chat_path(config.chat_history_dir, chat_id)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Chat not found")
     filepath.unlink()
