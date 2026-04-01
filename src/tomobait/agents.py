@@ -33,13 +33,15 @@ class AgentState(TypedDict):
 
 def router_node(state: AgentState) -> dict:
     """Use the LLM to classify the question and decide which agent to use."""
-    response = router_client.messages.create(
+    response = router_client.chat.completions.create(
         model=_router_settings["model"],
         max_tokens=config.agents.router.max_tokens,
-        system=config.agents.router.system_prompt,
-        messages=[{"role": "user", "content": state["question"]}],
+        messages=[
+            {"role": "system", "content": config.agents.router.system_prompt},
+            {"role": "user", "content": state["question"]},
+        ],
     )
-    route = response.content[0].text.strip().lower()
+    route = response.choices[0].message.content.strip().lower()
     # Default to documentation if the LLM returns something unexpected
     if route not in ("documentation", "device"):
         route = "documentation"
@@ -58,17 +60,20 @@ def route_decision(state: AgentState) -> str:
 
 DOC_TOOLS = [
     {
-        "name": "query_documentation",
-        "description": "Search the project documentation for a given query.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query for the documentation",
-                }
+        "type": "function",
+        "function": {
+            "name": "query_documentation",
+            "description": "Search the project documentation for a given query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query for the documentation",
+                    }
+                },
+                "required": ["query"],
             },
-            "required": ["query"],
         },
     }
 ]
@@ -133,50 +138,47 @@ def doc_agent_node(state: AgentState) -> dict:
         "your response."
     )
 
-    messages = [{"role": "user", "content": prompt}]
+    messages = [
+        {"role": "system", "content": config.agents.doc_agent.system_prompt},
+        {"role": "user", "content": prompt},
+    ]
 
     while True:
-        response = doc_client.messages.create(
+        import json as _json
+
+        response = doc_client.chat.completions.create(
             model=_doc_settings["model"],
             max_tokens=config.agents.doc_agent.max_tokens,
-            system=config.agents.doc_agent.system_prompt,
             messages=messages,
             tools=DOC_TOOLS,
         )
 
-        if response.stop_reason == "end_turn":
-            final_text = ""
-            for block in response.content:
-                if block.type == "text":
-                    final_text += block.text
+        choice = response.choices[0]
+
+        if choice.finish_reason == "stop":
+            final_text = choice.message.content or ""
             print("\n--- FINAL ANSWER ---")
             print(final_text)
             return {"answer": final_text or "Sorry, I couldn't find an answer."}
 
-        if response.stop_reason == "tool_use":
-            # Append the assistant's response (with tool_use blocks)
-            messages.append({"role": "assistant", "content": response.content})
+        if choice.finish_reason == "tool_calls":
+            # Append the assistant's message (with tool_calls)
+            messages.append(choice.message)
 
-            # Execute each tool call and collect results
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = query_documentation(block.input["query"])
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        }
-                    )
-
-            messages.append({"role": "user", "content": tool_results})
+            # Execute each tool call and append results
+            for tool_call in choice.message.tool_calls:
+                args = _json.loads(tool_call.function.arguments)
+                result = query_documentation(args["query"])
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": result,
+                    }
+                )
         else:
-            # Unexpected stop reason — return whatever text we have
-            final_text = ""
-            for block in response.content:
-                if block.type == "text":
-                    final_text += block.text
+            # Unexpected finish reason — return whatever text we have
+            final_text = choice.message.content or ""
             return {"answer": final_text or "Sorry, I couldn't find an answer."}
 
 
@@ -204,17 +206,16 @@ def bits_agent_node(state: AgentState) -> dict:
     """BITS device expert agent (knowledge-only, no tools yet)."""
     print("Starting BITS device agent chat...")
 
-    response = bits_client.messages.create(
+    response = bits_client.chat.completions.create(
         model=_bits_settings["model"],
         max_tokens=config.agents.bits_agent.max_tokens,
-        system=_bits_system_prompt,
-        messages=[{"role": "user", "content": state["question"]}],
+        messages=[
+            {"role": "system", "content": _bits_system_prompt},
+            {"role": "user", "content": state["question"]},
+        ],
     )
 
-    final_text = ""
-    for block in response.content:
-        if block.type == "text":
-            final_text += block.text
+    final_text = response.choices[0].message.content or ""
 
     if final_text:
         print("\n--- BITS ANSWER ---")
