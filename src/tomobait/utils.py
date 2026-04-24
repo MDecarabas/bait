@@ -41,9 +41,15 @@ def build_llm_client(llm_settings: dict):
     if llm_settings["api_type"] == "anthropic":
         from anthropic import Anthropic
 
+        # The Anthropic SDK adds /v1/messages internally, so strip /v1
+        # from the base URL to avoid /v1/v1/messages double-path.
+        base = llm_settings["argo_base_url"].rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3]
+
         client = Anthropic(
             api_key=llm_settings["api_key"],
-            base_url=llm_settings["argo_base_url"],
+            base_url=base,
         )
     elif llm_settings["api_type"] == "openai":
         from openai import OpenAI

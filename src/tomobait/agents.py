@@ -36,7 +36,7 @@ def router_node(state: AgentState) -> dict:
     response = llm_chat(
         client=router_client,
         model=_router_settings["model"],
-        max_tokens=config.agents.router.max_tokens,
+        max_tokens=50,
         system_prompt=config.agents.router.system_prompt,
         messages=[{"role": "user", "content": state["question"]}],
     )
@@ -144,7 +144,7 @@ def doc_agent_node(state: AgentState) -> dict:
         response = llm_chat(
             client=doc_client,
             model=_doc_settings["model"],
-            max_tokens=config.agents.doc_agent.max_tokens,
+            max_tokens=4096,
             system_prompt=config.agents.doc_agent.system_prompt,
             messages=messages,
             tools=DOC_TOOLS,
@@ -198,7 +198,7 @@ def bits_agent_node(state: AgentState) -> dict:
     response = llm_chat(
         client=bits_client,
         model=_bits_settings["model"],
-        max_tokens=config.agents.bits_agent.max_tokens,
+        max_tokens=4096,
         system_prompt=_bits_system_prompt,
         messages=[{"role": "user", "content": state["question"]}],
     )

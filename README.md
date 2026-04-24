@@ -217,21 +217,18 @@ agents:
     api_key: your_anl_username
     argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: "Classify as 'documentation' or 'device'."
-    max_tokens: 50
   doc_agent:
     model: claudeopus46
     api_type: anthropic
     api_key: your_anl_username
     argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: "You are a documentation expert..."
-    max_tokens: 2048
   bits_agent:
     model: claudeopus46
     api_type: anthropic
     api_key: your_anl_username
     argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: "You are a beamline device expert..."
-    max_tokens: 2048
 
 text_processing:
   chunk_size: 1000

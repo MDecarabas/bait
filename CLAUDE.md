@@ -136,7 +136,7 @@ All configuration is centralized in `config.yaml`:
 - **Documentation**: Git repos, local folders, and reference resources
 - **Retriever**: k, search_type, score_threshold
 - **Embedding**: Provider (`huggingface` or `anl_argo`), model name, device
-- **Agents**: Per-agent config (router, doc_agent, bits_agent) with system prompts, max_tokens, and LLM settings (model, api_type, api_key, argo_base_url)
+- **Agents**: Per-agent config (router, doc_agent, bits_agent) with system prompts and LLM settings (model, api_type, api_key, argo_base_url)
 - **Text Processing**: chunk_size, chunk_overlap
 - **Server**: Ports (backend 8001, frontend 8000)
 - **BITS**: bits_skills_dir for device reference files

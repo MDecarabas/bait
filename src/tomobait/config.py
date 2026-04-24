@@ -61,7 +61,6 @@ class AgentConfig(BaseModel):
     """Per-agent configuration: prompt, token limit, and LLM settings."""
 
     system_prompt: str = Field(description="System prompt for this agent")
-    max_tokens: int = Field(default=4096, description="Max tokens for LLM response")
     model: str = Field(
         default="claudeopus46",
         description="Model name for this agent",
@@ -96,7 +95,6 @@ class AgentsConfig(BaseModel):
                 "or hardware interaction.\n\n"
                 "Respond with ONLY the category name, nothing else."
             ),
-            max_tokens=50,
         )
     )
     doc_agent: AgentConfig = Field(
@@ -113,7 +111,6 @@ class AgentsConfig(BaseModel):
                 "5. If the context is insufficient, say so. "
                 "Do not make up answers."
             ),
-            max_tokens=4096,
         )
     )
     bits_agent: AgentConfig = Field(
@@ -129,7 +126,6 @@ class AgentsConfig(BaseModel):
                 "does not contain enough information, say so. Do not invent PV "
                 "names or device attributes."
             ),
-            max_tokens=4096,
         )
     )
 

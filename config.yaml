@@ -23,7 +23,7 @@ embedding:
 agents:
   router:
     model: claudeopus46
-    api_type: openai
+    api_type: anthropic
     api_key: ecodrea
     argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: |
@@ -36,10 +36,9 @@ agents:
         shutters, scan parameters, Bluesky plans, or hardware interaction.
 
       Respond with ONLY the category name, nothing else.
-    max_tokens: 50
   doc_agent:
     model: claudeopus46
-    api_type: openai
+    api_type: anthropic
     api_key: ecodrea
     argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: |
@@ -49,10 +48,9 @@ agents:
       3. For "how to" questions, provide step-by-step numbered instructions
       4. Include relevant source links from the context (documentation URLs, GitHub, PyPI, etc.)
       5. If the context is insufficient, say so. Do not make up answers.
-    max_tokens: 4096
   bits_agent:
     model: claudeopus46
-    api_type: openai
+    api_type: anthropic
     api_key: ecodrea
     argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: |
@@ -64,7 +62,6 @@ agents:
 
       Base your answers on the device reference below. If the reference does not
       contain enough information, say so. Do not invent PV names or device attributes.
-    max_tokens: 4096
 
 text_processing:
   chunk_size: 1000
