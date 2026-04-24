@@ -6,7 +6,7 @@ from langgraph.graph import END, StateGraph
 
 from .config import BaitConfig
 from .retriever import get_documentation_retriever
-from .utils import build_llm_client
+from .utils import build_llm_client, build_tool_result_messages, llm_chat
 
 # --- Configuration & Per-Agent Clients ---
 config = BaitConfig()
@@ -33,16 +33,14 @@ class AgentState(TypedDict):
 
 def router_node(state: AgentState) -> dict:
     """Use the LLM to classify the question and decide which agent to use."""
-    response = router_client.chat.completions.create(
+    response = llm_chat(
+        client=router_client,
         model=_router_settings["model"],
         max_tokens=config.agents.router.max_tokens,
-        messages=[
-            {"role": "system", "content": config.agents.router.system_prompt},
-            {"role": "user", "content": state["question"]},
-        ],
+        system_prompt=config.agents.router.system_prompt,
+        messages=[{"role": "user", "content": state["question"]}],
     )
-    route = response.choices[0].message.content.strip().lower()
-    # Default to documentation if the LLM returns something unexpected
+    route = (response["text"] or "").strip().lower()
     if route not in ("documentation", "device"):
         route = "documentation"
     print(f"Router: classified as '{route}'")
@@ -111,7 +109,9 @@ def query_documentation(query: str) -> str:
                 sources.append(f"{field_name}: {url}")
 
         if sources:
-            chunk_with_source = f"{chunk}\n\n[Sources: {' | '.join(sources)}]"
+            chunk_with_source = (
+                f"{chunk}\n\n[Sources: {' | '.join(sources)}]"
+            )
         else:
             chunk_with_source = chunk
 
@@ -138,48 +138,38 @@ def doc_agent_node(state: AgentState) -> dict:
         "your response."
     )
 
-    messages = [
-        {"role": "system", "content": config.agents.doc_agent.system_prompt},
-        {"role": "user", "content": prompt},
-    ]
+    messages = [{"role": "user", "content": prompt}]
 
     while True:
-        import json as _json
-
-        response = doc_client.chat.completions.create(
+        response = llm_chat(
+            client=doc_client,
             model=_doc_settings["model"],
             max_tokens=config.agents.doc_agent.max_tokens,
+            system_prompt=config.agents.doc_agent.system_prompt,
             messages=messages,
             tools=DOC_TOOLS,
         )
 
-        choice = response.choices[0]
+        if response["tool_calls"]:
+            tool_results = []
+            for tc in response["tool_calls"]:
+                result = query_documentation(tc["arguments"]["query"])
+                tool_results.append(result)
 
-        if choice.finish_reason == "stop":
-            final_text = choice.message.content or ""
+            tool_msgs = build_tool_result_messages(
+                client=doc_client,
+                tool_calls=response["tool_calls"],
+                results=tool_results,
+                assistant_message=response["_assistant_msg"],
+            )
+            messages.extend(tool_msgs)
+        else:
+            final_text = response["text"] or ""
             print("\n--- FINAL ANSWER ---")
             print(final_text)
-            return {"answer": final_text or "Sorry, I couldn't find an answer."}
-
-        if choice.finish_reason == "tool_calls":
-            # Append the assistant's message (with tool_calls)
-            messages.append(choice.message)
-
-            # Execute each tool call and append results
-            for tool_call in choice.message.tool_calls:
-                args = _json.loads(tool_call.function.arguments)
-                result = query_documentation(args["query"])
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": result,
-                    }
-                )
-        else:
-            # Unexpected finish reason — return whatever text we have
-            final_text = choice.message.content or ""
-            return {"answer": final_text or "Sorry, I couldn't find an answer."}
+            return {
+                "answer": final_text or "Sorry, I couldn't find an answer."
+            }
 
 
 # --- BITS Device Expert Agent ---
@@ -192,7 +182,6 @@ if _skills_path.is_file():
 else:
     print(f"Warning: device_skills.md not found at {_skills_path}")
 
-# Build effective BITS system prompt: config prompt + skills reference
 _bits_system_prompt = config.agents.bits_agent.system_prompt
 if _device_skills_content:
     _bits_system_prompt += (
@@ -206,16 +195,15 @@ def bits_agent_node(state: AgentState) -> dict:
     """BITS device expert agent (knowledge-only, no tools yet)."""
     print("Starting BITS device agent chat...")
 
-    response = bits_client.chat.completions.create(
+    response = llm_chat(
+        client=bits_client,
         model=_bits_settings["model"],
         max_tokens=config.agents.bits_agent.max_tokens,
-        messages=[
-            {"role": "system", "content": _bits_system_prompt},
-            {"role": "user", "content": state["question"]},
-        ],
+        system_prompt=_bits_system_prompt,
+        messages=[{"role": "user", "content": state["question"]}],
     )
 
-    final_text = response.choices[0].message.content or ""
+    final_text = response["text"] or ""
 
     if final_text:
         print("\n--- BITS ANSWER ---")
@@ -241,7 +229,7 @@ graph_builder.add_edge("bits_agent", END)
 graph = graph_builder.compile()
 
 
-# --- Public API (unchanged interface) ---
+# --- Public API ---
 
 
 def route_question(user_question: str) -> str:
@@ -249,5 +237,7 @@ def route_question(user_question: str) -> str:
 
     This is the main entry point called by the FastAPI backend.
     """
-    result = graph.invoke({"question": user_question, "answer": "", "route": ""})
+    result = graph.invoke(
+        {"question": user_question, "answer": "", "route": ""}
+    )
     return result["answer"]

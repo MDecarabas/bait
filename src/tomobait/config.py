@@ -57,46 +57,26 @@ class RetrieverConfig(BaseModel):
     )
 
 
-class LLMConfig(BaseModel):
-    """Default LLM connection settings (shared by all agents unless overridden)."""
-
-    provider: str = Field(
-        default="GEMINI_API_KEY",
-        description="Environment variable name containing the API key",
-    )
-    argo_base_url: str = Field(
-        default="https://apps-dev.inside.anl.gov/argoapi/v1/",
-        description="Base URL for the LLM API (if applicable)",
-    )
-    api_key: str = Field(
-        default="",
-        description="API key for the LLM provider",
-    )
-    model: str = Field(
-        default="gemini-2.5-flash", description="Model name (e.g., gemini-2.5-flash)"
-    )
-    api_type: str = Field(
-        default="google", description="API type (google, openai, etc.)"
-    )
-
-
 class AgentConfig(BaseModel):
-    """Per-agent configuration: prompt, token limit, and optional LLM overrides."""
+    """Per-agent configuration: prompt, token limit, and LLM settings."""
 
     system_prompt: str = Field(description="System prompt for this agent")
     max_tokens: int = Field(default=4096, description="Max tokens for LLM response")
-    model: Optional[str] = Field(
-        default=None, description="Override model (falls back to llm.model)"
+    model: str = Field(
+        default="claudeopus46",
+        description="Model name for this agent",
     )
-    api_type: Optional[str] = Field(
-        default=None, description="Override api_type (falls back to llm.api_type)"
+    api_type: str = Field(
+        default="anthropic",
+        description="API protocol: 'openai' or 'anthropic'",
     )
-    api_key: Optional[str] = Field(
-        default=None, description="Override api_key (falls back to llm.api_key)"
+    api_key: str = Field(
+        default="",
+        description="API key (ANL username for Argo)",
     )
-    argo_base_url: Optional[str] = Field(
-        default=None,
-        description="Override base URL (falls back to llm.argo_base_url)",
+    argo_base_url: str = Field(
+        default="https://apps.inside.anl.gov/argoapi/v1",
+        description="Base URL for the LLM API",
     )
 
 
@@ -187,7 +167,7 @@ class EmbeddingConfig(BaseModel):
     )
     model: str = Field(
         default="sentence-transformers/all-MiniLM-L6-v2",
-        description="Model name (HuggingFace model or Argo model like 'ada002')",
+        description="Model name (HuggingFace model or Argo model)",
     )
     device: str = Field(
         default="cpu",
@@ -195,7 +175,7 @@ class EmbeddingConfig(BaseModel):
     )
     argo_user: Optional[str] = Field(
         default=None,
-        description="ANL username for Argo API (if provider is 'argo')",
+        description="ANL username for Argo API (if provider is 'anl_argo')",
     )
     argo_base_url: str = Field(
         default="https://apps-dev.inside.anl.gov/argoapi/api/v1/resource/embed/",
@@ -215,10 +195,7 @@ class BITSConfig(BaseModel):
 class BaitConfig(BaseSettings):
     """Main configuration for TomoBait, loaded from config.yaml."""
 
-    model_config = SettingsConfigDict(
-        # Ensure the default config.yaml is loaded if it exists
-        yaml_file="config.yaml"
-    )
+    model_config = SettingsConfigDict(yaml_file="config.yaml")
 
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     documentation: DocumentationSourceConfig = Field(
@@ -226,7 +203,6 @@ class BaitConfig(BaseSettings):
     )
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
-    llm: LLMConfig = Field(default_factory=LLMConfig)
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -272,16 +248,13 @@ class BaitConfig(BaseSettings):
         return Path(self.bits.path) if self.bits.path else Path(".")
 
     def get_agent_llm_settings(self, agent_name: str) -> dict:
-        """Return resolved LLM settings for a given agent.
-
-        Merges agent-specific overrides onto the global llm config.
-        """
+        """Return LLM settings for a given agent."""
         agent_config: AgentConfig = getattr(self.agents, agent_name)
         return {
-            "model": agent_config.model or self.llm.model,
-            "api_type": agent_config.api_type or self.llm.api_type,
-            "api_key": agent_config.api_key or self.llm.api_key,
-            "argo_base_url": agent_config.argo_base_url or self.llm.argo_base_url,
+            "model": agent_config.model,
+            "api_type": agent_config.api_type,
+            "api_key": agent_config.api_key,
+            "argo_base_url": agent_config.argo_base_url,
         }
 
     @classmethod
@@ -297,7 +270,5 @@ class BaitConfig(BaseSettings):
         return (
             init_settings,
             YamlConfigSettingsSource(settings_cls),
-            env_settings,
-            dotenv_settings,
             file_secret_settings,
         )

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TomoBait is a RAG (Retrieval-Augmented Generation) system for tomography beamline documentation. It ingests Sphinx documentation from the 2-BM beamline, stores it in a vector database (ChromaDB), and provides a conversational interface for querying the documentation using AI agents.
+TomoBait is a RAG (Retrieval-Augmented Generation) system for tomography beamline documentation. It ingests Sphinx documentation from the 2-BM beamline, stores it in a vector database (ChromaDB), and provides a conversational interface for querying the documentation using LangGraph-orchestrated AI agents.
 
 ## Development Environment
 
@@ -13,8 +13,8 @@ This project uses **uv** for dependency management and task running.
 ### Initial Setup
 
 ```bash
-uv venv # Creates a virtual environment
-uv pip install -e . # Installs dependencies
+uv venv
+uv pip install -e .
 ```
 
 ## Common Commands
@@ -33,10 +33,10 @@ uv run start-frontend
 
 ```bash
 # Check code style
-ruff check .
+uv run ruff check .
 
 # Format code
-ruff format .
+uv run ruff format .
 ```
 
 ### Data Ingestion
@@ -46,105 +46,127 @@ ruff format .
 uv run python -m tomobait.data_ingestion
 ```
 
+### Testing
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=tomobait
+```
+
 ## Architecture
+
+### Multi-Agent System (LangGraph)
+
+TomoBait uses a LangGraph StateGraph with three nodes:
+
+1. **Router** — classifies incoming questions as "documentation" or "device"
+2. **Doc Agent** — retrieves documentation chunks from ChromaDB via tool calling, then synthesizes an answer
+3. **BITS Agent** — answers device-related questions using a preloaded skills reference file
+
+The flow: `router → (conditional edge) → doc_agent | bits_agent → END`
 
 ### Project-Based Data Isolation
 
-TomoBait uses a project-based directory structure to isolate all data:
-- Each project is defined in `config.yaml` with a `project.name` (e.g., "tomo")
-- All data is stored in `.bait-{name}/` directory (e.g., `.bait-tomo/`)
-- Directory structure:
-  ```
-  .bait-tomo/
-  ├── chroma_db/          # Vector database
-  └── documentation/      # Cloned repos and built docs
-  ```
+All data lives under `.bait-{project.name}/` (e.g., `.bait-tomo/`):
+
+```
+.bait-tomo/
+├── chroma_db/          # Vector database
+├── documentation/      # Cloned repos and built docs
+└── chat_history/       # Saved conversation JSON files
+```
 
 ### Modules
 
 1. **Configuration** (`config.py`)
    - Centralized configuration via pydantic-settings, loaded from `config.yaml`
-   - `BaitConfig` is the main settings class with computed path properties (`data_dir`, `docs_output_dir`, `db_path`)
-   - `get_embeddings(config)` — shared factory that creates the correct embedding model (HuggingFace or ANL Argo) based on config
+   - `BaitConfig` is the main settings class with computed path properties (`data_dir`, `docs_output_dir`, `db_path`, `chat_history_dir`, `bits_skills_dir`)
+   - Per-agent LLM settings with global defaults and per-agent overrides via `get_agent_llm_settings(agent_name)`
 
-2. **Data Ingestion** (`data_ingestion.py`)
+2. **Utilities** (`utils.py`)
+   - `get_embeddings(config)` — shared factory for embedding models (HuggingFace or ANL Argo)
+   - `build_llm_client(llm_settings)` — cached factory for OpenAI/Anthropic clients
+   - `llm_chat()` — SDK-agnostic wrapper that normalizes OpenAI and Anthropic call/response formats
+   - `build_tool_result_messages()` — formats tool results for either SDK
+
+3. **Data Ingestion** (`data_ingestion.py`)
    - Clones/updates documentation repositories from GitHub
    - Builds Sphinx documentation to HTML
    - Uses `ReadTheDocsLoader` to load HTML documentation
    - Chunks documents using `RecursiveCharacterTextSplitter` (configurable size/overlap)
-   - Embeds using the shared `get_embeddings()` factory
    - Stores in ChromaDB at `.bait-{project.name}/chroma_db`
 
-3. **Retriever** (`retriever.py`)
+4. **Retriever** (`retriever.py`)
    - Shared utility for accessing ChromaDB
    - Returns top-k most relevant document chunks (configurable, default k=3)
    - Can be tested standalone: `python -m tomobait.retriever "test query"`
 
-4. **Agents** (`agents.py`)
-   - Defines the AG2 (Autogen) two-agent system:
-     - `doc_expert` (AssistantAgent): LLM-powered agent that answers questions
-     - `tool_worker` (UserProxyAgent): Executes the `query_documentation` tool
-   - Handles LLM provider switching (standard API key providers vs ANL Argo)
-   - `run_agent_chat(user_question)` — main entry point for running a Q&A session
+5. **Agents** (`agents.py`)
+   - LangGraph StateGraph with three nodes: `router`, `doc_agent`, `bits_agent`
+   - Router classifies questions; conditional edge dispatches to the right agent
+   - Doc agent uses OpenAI-compatible tool calling to invoke `query_documentation`
+   - BITS agent uses preloaded device skills reference for device questions
+   - `route_question(user_question)` — main entry point called by the backend
 
-5. **Backend** (`app.py`)
-   - FastAPI server exposing `/chat` endpoint (POST)
-   - Also exposes `/config` GET/POST endpoints
-   - Bridges HTTP requests to `run_agent_chat()`
+6. **Backend** (`app.py`)
+   - FastAPI server with endpoints:
+     - `POST /chat` — send a question, get an agent response
+     - `GET /config` — read current configuration
+     - `POST /config` — update configuration (placeholder)
+     - `POST /chat/save` — save or update a conversation
+     - `GET /chat/history` — list saved chats (metadata only)
+     - `GET /chat/history/{chat_id}` — load a full conversation
+     - `DELETE /chat/history/{chat_id}` — delete a conversation
+   - Path traversal protection on chat history endpoints
 
-6. **Frontend** (`frontend.py`)
-   - Gradio chatbot interface with a single Chat tab
+7. **Frontend** (`frontend.py`)
+   - Gradio chatbot interface with sidebar chat history management
    - Makes HTTP requests to the FastAPI backend
+   - Save, load, and delete conversation sessions
    - Serves documentation images through Gradio's `allowed_paths` mechanism
 
 ## Key Configuration
 
 All configuration is centralized in `config.yaml`:
 
-- **Project Settings**: `project.name` and `project.data_dir` (e.g., ".bait-tomo")
-- **Documentation**: Git repos and local folders
+- **Project Settings**: `project.name` and `project.data_dir`
+- **Documentation**: Git repos, local folders, and reference resources
 - **Retriever**: k, search_type, score_threshold
-- **Embedding**: Provider (`huggingface` or `anl_argo`), model name, device. Must match between ingestion and retrieval.
-- **LLM**: Provider, model, api_type, argo_base_url, system_message
+- **Embedding**: Provider (`huggingface` or `anl_argo`), model name, device
+- **Agents**: Per-agent config (router, doc_agent, bits_agent) with system prompts, max_tokens, and LLM settings (model, api_type, api_key, argo_base_url)
 - **Text Processing**: chunk_size, chunk_overlap
 - **Server**: Ports (backend 8001, frontend 8000)
+- **BITS**: bits_skills_dir for device reference files
 
-## Environment Variables
+## API Keys
 
-For standard LLM providers, set the API key as an environment variable (or in a `.env` file):
-
-- `GEMINI_API_KEY` — Google Gemini (default)
-- `OPENAI_API_KEY` — OpenAI
-- `ANTHROPIC_API_KEY` — Anthropic
-- `AZURE_OPENAI_API_KEY` — Azure OpenAI
-
-ANL Argo uses `api_key` and `argo_base_url` fields directly in `config.yaml` instead of environment variables.
+All API keys are configured per-agent in `config.yaml` under `agents.{agent_name}.api_key`. For ANL Argo, the API key is your ANL username. Each agent can use a different provider/model independently.
 
 ## Code Style
 
-- Ruff for linting and formatting
+- Ruff for linting and formatting (config in `ruff.toml`)
 - Line length: 88 characters
 - Linting rules: Pyflakes (F), pycodestyle (E), isort (I)
 - Double quotes, space indentation
 
 ## Important Implementation Details
 
-### Agent Termination Logic
+### Agent Routing and Tool Calling
 
-The `tool_worker` agent terminates when it receives a message WITHOUT tool calls. This means the conversation flow is:
-1. User question sent to doc_expert
-2. doc_expert generates tool call
-3. tool_worker executes tool, returns results
-4. doc_expert generates final answer (no tool calls)
-5. Conversation terminates
+The LangGraph router classifies questions as "documentation" or "device". The doc agent uses tool calling (`query_documentation`) via the SDK-agnostic `llm_chat()` wrapper in `utils.py`, which handles both OpenAI and Anthropic protocols. The tool-call loop continues until the LLM returns a final text answer. The BITS agent answers from a preloaded device skills markdown file without tool calls.
+
+### Chat History Persistence
+
+Conversations are saved as JSON files in `.bait-{project.name}/chat_history/`. Each file stores messages, title, timestamps, and a unique ID. The backend guards against path traversal attacks on chat IDs.
 
 ### Documentation Sources
 
 The system can ingest from multiple sources:
 - **Git Repositories**: Cloned to `.bait-{name}/documentation/`, Sphinx docs built automatically
 - **Local Folders**: Pre-built documentation can be loaded directly
-
-Default configuration includes the 2-BM tomography beamline documentation. The ingestion process expects a Sphinx documentation structure with a `docs/` directory.
 
 ### Image Handling in Frontend
 
@@ -156,8 +178,8 @@ All paths are computed properties on `BaitConfig`:
 - `config.data_dir` → `.bait-{project.name}/`
 - `config.db_path` → `.bait-{project.name}/chroma_db`
 - `config.docs_output_dir` → `.bait-{project.name}/documentation`
-
-No hardcoded paths exist outside of `config.yaml`.
+- `config.chat_history_dir` → `.bait-{project.name}/chat_history`
+- `config.bits_skills_dir` → `.bait-{project.name}/bits_skills`
 
 ## gstack
 

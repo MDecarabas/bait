@@ -14,22 +14,18 @@ retriever:
   score_threshold: null
 
 embedding:
-  provider: anl_argo  # 'huggingface' for local or 'anl_argo' for ANL Argo API
-  api_key: ecodrea
-  # model: 'sentence-transformers/all-MiniLM-L6-v2'  # For argo: 'ada002'. For huggingface: 'sentence-transformers/all-MiniLM-L6-v2'
-  model: 'text-embedding-3-large'  # For argo: 'ada002'. For huggingface: 'sentence-transformers/all-MiniLM-L6-v2'
-  device: cpu  # Device for local embeddings: 'cpu', 'cuda', 'mps', or 'auto'
-  argo_base_url: https://apps-dev.inside.anl.gov/argoapi/v1
-
-llm:
   provider: anl_argo
   api_key: ecodrea
-  model: claudeopus46
-  api_type: openai
-  argo_base_url: https://apps-dev.inside.anl.gov/argoapi
+  model: 'text-embedding-3-large'
+  device: cpu
+  argo_base_url: https://apps-dev.inside.anl.gov/argoapi/v1
 
 agents:
   router:
+    model: claudeopus46
+    api_type: openai
+    api_key: ecodrea
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: |
       You are a question classifier for a beamline instrument system.
 
@@ -42,6 +38,10 @@ agents:
       Respond with ONLY the category name, nothing else.
     max_tokens: 50
   doc_agent:
+    model: claudeopus46
+    api_type: openai
+    api_key: ecodrea
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: |
       You are an expert on this project's documentation. When answering questions:
       1. Answer based *only* on the context from your 'query_documentation' tool
@@ -51,6 +51,10 @@ agents:
       5. If the context is insufficient, say so. Do not make up answers.
     max_tokens: 4096
   bits_agent:
+    model: claudeopus46
+    api_type: openai
+    api_key: ecodrea
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
     system_prompt: |
       You are an expert on BITS (Beamline Instrument and Tool Suite) devices,
       ophyd signals, EPICS PVs, scan parameters, and Bluesky plans for this beamline.

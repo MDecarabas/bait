@@ -4,7 +4,6 @@ import os
 import tempfile
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -34,28 +33,32 @@ def test_bait_config_path_resolution():
         assert config.chat_history_dir == config.data_dir / "chat_history"
 
 
-def test_get_agent_llm_settings_uses_defaults():
-    """Agent LLM settings should fall back to global llm config."""
+def test_get_agent_llm_settings_defaults():
+    """Agent LLM settings should read from the agent's own config."""
     with tempfile.TemporaryDirectory() as tmpdir:
         os.chdir(tmpdir)
         from tomobait.config import BaitConfig
 
         config = BaitConfig()
         settings = config.get_agent_llm_settings("router")
-        assert settings["model"] == config.llm.model
-        assert settings["api_type"] == config.llm.api_type
+        assert settings["model"] == config.agents.router.model
+        assert settings["api_type"] == config.agents.router.api_type
+        assert settings["api_type"] == "anthropic"
+        assert settings["model"] == "claudeopus46"
 
 
-def test_get_agent_llm_settings_with_override():
-    """Agent-specific overrides should take precedence over global settings."""
+def test_get_agent_llm_settings_per_agent():
+    """Each agent can have its own LLM settings in config.yaml."""
     with tempfile.TemporaryDirectory() as tmpdir:
         os.chdir(tmpdir)
         config_data = {
-            "llm": {"model": "default-model", "api_type": "openai", "api_key": "key1", "argo_base_url": "http://default"},
             "agents": {
                 "router": {
                     "system_prompt": "test",
                     "model": "custom-model",
+                    "api_type": "openai",
+                    "api_key": "testuser",
+                    "argo_base_url": "http://custom",
                 }
             },
         }
@@ -67,7 +70,9 @@ def test_get_agent_llm_settings_with_override():
         config = BaitConfig()
         settings = config.get_agent_llm_settings("router")
         assert settings["model"] == "custom-model"
-        assert settings["api_key"] == "key1"  # falls back to global
+        assert settings["api_type"] == "openai"
+        assert settings["api_key"] == "testuser"
+        assert settings["argo_base_url"] == "http://custom"
 
 
 def test_bits_skills_dir_with_path():

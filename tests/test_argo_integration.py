@@ -93,7 +93,10 @@ class TestArgoToolCalling:
             "type": "function",
             "function": {
                 "name": "query_documentation",
-                "description": "Query the documentation database for relevant information",
+                "description": (
+                    "Query the documentation database"
+                    " for relevant information"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -111,7 +114,10 @@ class TestArgoToolCalling:
             model=argo_model,
             messages=[{
                 "role": "user",
-                "content": "Please search the documentation for tomography setup instructions"
+                "content": (
+                    "Please search the documentation"
+                    " for tomography setup instructions"
+                )
             }],
             tools=tools,
             max_tokens=200,

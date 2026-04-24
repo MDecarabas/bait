@@ -3,10 +3,8 @@
 These tests mock the agents module to avoid module-level LLM client initialization.
 """
 
-import os
 import sys
 import types
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest

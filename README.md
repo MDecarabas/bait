@@ -6,8 +6,10 @@ A RAG (Retrieval-Augmented Generation) system for tomography beamline documentat
 
 - **Multi-Source Documentation**: Index from Git repositories and local folders
 - **AI-Powered Q&A**: Ask questions in natural language and get accurate answers from documentation
-- **Multiple LLM Providers**: Support for Gemini, OpenAI, Anthropic, Azure, and ANL Argo
-- **Web Interface**: Gradio-based chat UI
+- **Multi-Agent Routing**: LangGraph-based router dispatches questions to specialized agents (documentation or device)
+- **Multiple LLM Providers**: Support for OpenAI, Anthropic, and ANL Argo (OpenAI-compatible)
+- **Chat History**: Save, load, and manage conversation sessions
+- **Web Interface**: Gradio-based chat UI with sidebar history
 
 ## Architecture
 
@@ -19,7 +21,7 @@ graph TB
         LOCAL["Local Folders<br/>(pre-built HTML)"]
         CLONE["Clone / Pull<br/>(GitPython)"]
         SPHINX["Sphinx Build<br/>(sphinx-build -b html)"]
-        HTML[("HTML Files<br/>.bait-tomo/documentation/<br/>repo/docs/_build/html/")]
+        HTML[("HTML Files<br/>.bait-tomo/documentation/")]
         LOADER["ReadTheDocsLoader<br/>(langchain)"]
         DOCS["Document Objects"]
         CHUNKER["RecursiveCharacterTextSplitter<br/>(chunk_size=1000, overlap=200)"]
@@ -41,37 +43,61 @@ graph TB
     subgraph SERVE["Phase 2: Serving (continuous)"]
         direction TB
 
-        subgraph BACKEND["Backend — FastAPI :8001"]
+        subgraph BACKEND["Backend: FastAPI :8001"]
             direction TB
             CHATEP["/chat endpoint"]
 
-            subgraph AGENTS["AG2 Multi-Agent System"]
-                direction LR
-                TECH["doc_expert<br/>(AssistantAgent + LLM)"]
-                WORKER["tool_worker<br/>(UserProxyAgent)"]
-                TECH -->|"tool_call:<br/>query_documentation(q)"| WORKER
-                WORKER -->|"context docs<br/>+ source links"| TECH
+            subgraph AGENTS["LangGraph StateGraph"]
+                direction TB
+                ROUTER["Router Node<br/>(LLM classifies:<br/>'documentation' or 'device')"]
+                DOC["Doc Agent Node"]
+                BITS["BITS Agent Node"]
+                ROUTER -->|"documentation"| DOC
+                ROUTER -->|"device"| BITS
+                DOC -->|"END"| DONE1[" "]
+                BITS -->|"END"| DONE2[" "]
             end
 
-            subgraph RETRIEVAL["Retriever"]
-                EMBED_Q["Embed Query<br/>(same model as ingestion)"]
-                SEARCH["Similarity Search<br/>(top k=3 docs)"]
-                EMBED_Q --> SEARCH
+            subgraph DOC_LOOP["Doc Agent Tool Loop"]
+                direction TB
+                LLM_CALL["LLM call with<br/>query_documentation tool"]
+                TOOL_CHECK{"finish_reason?"}
+                EXEC_TOOL["Execute tool:<br/>embed query +<br/>ChromaDB search (k=3)"]
+                FEED_BACK["Feed chunks<br/>back to LLM"]
+                FINAL["Return final answer"]
+                LLM_CALL --> TOOL_CHECK
+                TOOL_CHECK -->|"tool_calls"| EXEC_TOOL
+                EXEC_TOOL --> FEED_BACK
+                FEED_BACK --> LLM_CALL
+                TOOL_CHECK -->|"stop"| FINAL
+            end
+
+            subgraph BITS_FLOW["BITS Agent Flow"]
+                SKILLS_FILE["device_skills.md<br/>(loaded at startup)"]
+                BITS_LLM["Single LLM call<br/>(skills in system prompt)"]
+                SKILLS_FILE --> BITS_LLM
+            end
+
+            subgraph HISTORY["Chat History CRUD"]
+                SAVE["/chat/save"]
+                LIST["/chat/history"]
+                LOAD["/chat/history/{id}"]
+                DEL["DELETE /chat/history/{id}"]
             end
 
             CHATEP -->|"user question"| AGENTS
-            WORKER -->|"invoke retriever"| RETRIEVAL
-            AGENTS -->|"final answer"| CHATEP
+            DOC --> DOC_LOOP
+            BITS --> BITS_FLOW
         end
 
-        subgraph FRONTEND["Frontend — Gradio :8000"]
+        subgraph FRONTEND["Frontend: Gradio :8000"]
             direction TB
-            CHATUI["Chat Tab"]
+            CHATUI["Chat Tab +<br/>Sidebar History"]
         end
     end
 
-    SEARCH -->|"query vector"| DB
-    DB -->|"top k chunks<br/>+ metadata"| SEARCH
+    EXEC_TOOL -->|"query vector"| DB
+    DB -->|"top k chunks"| EXEC_TOOL
 
     FRONTEND -->|"HTTP POST /chat"| CHATEP
     CHATEP -->|"JSON response"| FRONTEND
@@ -90,14 +116,12 @@ graph TB
     CONFIG -.->|"server host/port"| FRONTEND
 
     subgraph LLM_PROVIDERS["LLM Providers"]
-        GEMINI["Google Gemini"]
         OPENAI["OpenAI"]
         ANTHROPIC["Anthropic"]
-        AZURE["Azure OpenAI"]
         ARGO["ANL Argo"]
     end
 
-    TECH -->|"API call<br/>(based on config)"| LLM_PROVIDERS
+    AGENTS -->|"API call<br/>(based on config)"| LLM_PROVIDERS
 
     style INGEST fill:#fff3e0,stroke:#ff9800
     style STORE fill:#f3e5f5,stroke:#9c27b0
@@ -130,12 +154,17 @@ uv venv
 uv pip install -e .
 ```
 
-3. **Set up environment variables**
+3. **Configure API key**
 
-Create a `.env` file with your API key:
-```bash
-GEMINI_API_KEY=your_key_here
-# Or whichever provider you're using: OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+Edit `config.yaml` and set your ANL username as `api_key` under each agent:
+```yaml
+agents:
+  router:
+    api_key: your_anl_username
+  doc_agent:
+    api_key: your_anl_username
+  bits_agent:
+    api_key: your_anl_username
 ```
 
 4. **Ingest documentation** (first time only)
@@ -164,32 +193,49 @@ TomoBait uses a centralized `config.yaml` file, loaded via pydantic-settings.
 
 ```yaml
 project:
-  name: tomo                # Project identifier (used in directory naming)
-  data_dir: .bait-tomo      # Base directory for all project data
+  name: tomo
+  data_dir: .bait-tomo
 
 documentation:
-  git_repos:                # List of Git repository URLs
+  git_repos:
     - https://github.com/xray-imaging/2bm-docs.git
-  local_folders: []         # List of local folder paths
+  local_folders: []
 
 retriever:
-  k: 3                     # Number of documents to retrieve
-  search_type: similarity   # similarity, mmr, or similarity_score_threshold
-  score_threshold: null
+  k: 3
+  search_type: similarity
 
 embedding:
-  provider: huggingface     # 'huggingface' (local) or 'anl_argo'
+  provider: huggingface
   model: sentence-transformers/all-MiniLM-L6-v2
   device: cpu
 
-llm:
-  provider: GEMINI_API_KEY  # Environment variable name for API key
-  model: gemini-2.5-flash   # Model name
-  api_type: google          # google, openai, anthropic, azure
+agents:
+  router:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: your_anl_username
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
+    system_prompt: "Classify as 'documentation' or 'device'."
+    max_tokens: 50
+  doc_agent:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: your_anl_username
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
+    system_prompt: "You are a documentation expert..."
+    max_tokens: 2048
+  bits_agent:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: your_anl_username
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
+    system_prompt: "You are a beamline device expert..."
+    max_tokens: 2048
 
 text_processing:
-  chunk_size: 1000          # Text chunk size (100-5000)
-  chunk_overlap: 200        # Overlap between chunks (0-1000)
+  chunk_size: 1000
+  chunk_overlap: 200
 
 server:
   backend_host: 127.0.0.1
@@ -198,97 +244,110 @@ server:
   frontend_port: 8000
 ```
 
-### Switching LLM Providers
+### Switching API Protocol
 
-Switch providers by editing `config.yaml`:
+Each agent can use either the Anthropic Messages API or OpenAI Chat Completions API. Both are supported by ANL Argo.
 
-**Gemini (Default)**
+**Anthropic protocol** (default)
 ```yaml
-llm:
-  provider: GEMINI_API_KEY
-  model: gemini-2.5-flash
-  api_type: google
+agents:
+  doc_agent:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: your_anl_username
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
 ```
 
-**OpenAI**
+**OpenAI protocol**
 ```yaml
-llm:
-  provider: OPENAI_API_KEY
-  model: gpt-4
-  api_type: openai
+agents:
+  doc_agent:
+    model: gpt4o
+    api_type: openai
+    api_key: your_anl_username
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
 ```
 
-**Anthropic (Claude)**
-```yaml
-llm:
-  provider: ANTHROPIC_API_KEY
-  model: claude-3-opus
-  api_type: anthropic
-```
-
-**ANL Argo** (Internal LLM service)
-```yaml
-llm:
-  provider: anl_argo
-  api_key: your_anl_username
-  model: claudeopus46
-  api_type: openai
-  argo_base_url: https://apps-dev.inside.anl.gov/argoapi/v1/
-```
+Each agent is configured independently, so you can mix protocols per agent.
 
 ## Available Commands
 
 ```bash
 # Running
-uv run start-backend                    # Start FastAPI backend (port 8001)
-uv run start-frontend                   # Start Gradio frontend (port 8000)
+uv run start-backend                      # Start FastAPI backend (port 8001)
+uv run start-frontend                     # Start Gradio frontend (port 8000)
 
 # Data Management
 uv run python -m tomobait.data_ingestion  # Ingest documentation into vector DB
 
+# Testing
+uv run pytest                             # Run test suite
+uv run pytest --cov=tomobait              # Run with coverage
+
 # Code Quality
-ruff check .                            # Check code style
-ruff format .                           # Format code
+uv run ruff check .                       # Check code style
+uv run ruff format .                      # Format code
 ```
 
-## System Architecture
-
-### Modules
+## Modules
 
 | Module | Description |
 |--------|-------------|
-| `config.py` | Centralized configuration via pydantic-settings, loaded from `config.yaml`. Provides `BaitConfig` and shared `get_embeddings()` factory. |
+| `config.py` | Centralized configuration via pydantic-settings. Provides `BaitConfig` with computed paths and per-agent LLM settings. |
+| `utils.py` | Shared factories: `get_embeddings()` for embedding models, `build_llm_client()` for cached OpenAI/Anthropic clients, `llm_chat()` SDK-agnostic wrapper, `build_tool_result_messages()` for tool results. |
 | `data_ingestion.py` | Clones Git repos, builds Sphinx docs, chunks text, embeds, and stores in ChromaDB. |
 | `retriever.py` | Shared utility for querying ChromaDB. Returns top-k relevant document chunks. |
-| `agents.py` | Defines the AG2 two-agent system (`doc_expert` + `tool_worker`) and the `query_documentation` tool. |
-| `app.py` | FastAPI server exposing `/chat` endpoint. Bridges HTTP requests to the agent system. |
-| `frontend.py` | Gradio chat interface. Sends questions to the backend and displays responses. |
+| `agents.py` | LangGraph StateGraph with router, doc_agent, and bits_agent nodes. Routes questions and orchestrates tool calling. |
+| `app.py` | FastAPI server: `/chat` endpoint, `/config` endpoints, and chat history CRUD (`/chat/save`, `/chat/history`, `/chat/delete`). |
+| `frontend.py` | Gradio chat interface with sidebar history management. Sends questions to backend and displays responses. |
 
-### Request Flow
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/chat` | Send a question, get an agent response |
+| GET | `/config` | Read current configuration |
+| POST | `/config` | Update configuration (placeholder) |
+| POST | `/chat/save` | Save or update a conversation |
+| GET | `/chat/history` | List saved chats (metadata only) |
+| GET | `/chat/history/{chat_id}` | Load a full conversation |
+| DELETE | `/chat/history/{chat_id}` | Delete a saved conversation |
+
+## Request Flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Frontend
-    participant Backend
-    participant Agent
-    participant Tool
+    participant Gradio as Frontend :8000
+    participant API as Backend :8001
+    participant Router as Router Node
+    participant DocAgent as Doc Agent
+    participant LLM as LLM Provider
     participant ChromaDB
 
-    User->>Frontend: Ask question
-    Frontend->>Backend: POST /chat
-    Backend->>Agent: Initialize chat
-    Agent->>Tool: Call query_documentation
-    Tool->>ChromaDB: Retrieve k docs
-    ChromaDB-->>Tool: Return chunks
-    Tool-->>Agent: Return context
-    Agent->>Agent: Generate answer
-    Agent-->>Backend: Final response
-    Backend-->>Frontend: JSON response
-    Frontend-->>User: Display answer
+    User->>Gradio: Ask question
+    Gradio->>API: POST /chat {query}
+    API->>Router: graph.invoke()
+    Router->>LLM: "Classify: documentation or device?"
+    LLM-->>Router: "documentation"
+
+    Router->>DocAgent: conditional edge
+
+    loop Tool-call loop (until finish_reason=stop)
+        DocAgent->>LLM: messages + tools=[query_documentation]
+        LLM-->>DocAgent: tool_call: query_documentation("tomography setup")
+        DocAgent->>ChromaDB: similarity search (k=3)
+        ChromaDB-->>DocAgent: top 3 chunks + metadata
+        DocAgent->>LLM: tool result with context
+    end
+
+    LLM-->>DocAgent: final answer (finish_reason=stop)
+    DocAgent-->>API: {answer: "..."}
+    API-->>Gradio: {response: "..."}
+    Gradio-->>User: Display answer
 ```
 
-### Project Data Directory
+## Project Data Directory
 
 All data is stored under `.bait-{project.name}/` (default: `.bait-tomo/`):
 
@@ -296,27 +355,25 @@ All data is stored under `.bait-{project.name}/` (default: `.bait-tomo/`):
 .bait-tomo/
   chroma_db/          # Vector database
   documentation/      # Cloned repos and built docs
+  chat_history/       # Saved conversation JSON files
+  bits_skills/        # Device skills reference files
 ```
 
 ## Contributing
 
 ### Code Style
 
-- Ruff for linting and formatting
+- Ruff for linting and formatting (config in `ruff.toml`)
 - Line length: 88 characters
 - Double quotes, space indentation
 
 ### Development Workflow
 
 1. Make changes
-2. Run `ruff format .` to format code
-3. Run `ruff check .` to check style
-4. Test changes locally
+2. Run `uv run ruff format .` to format code
+3. Run `uv run ruff check .` to check style
+4. Run `uv run pytest` to run tests
 5. Commit and push
-
-## License
-
-[Add your license here]
 
 ## Acknowledgments
 
@@ -327,7 +384,7 @@ All data is stored under `.bait-{project.name}/` (default: `.bait-tomo/`):
 ## Troubleshooting
 
 ### Backend won't start
-- Check that `GEMINI_API_KEY` (or your chosen provider's key) is set in `.env`
+- Check that your LLM API key is set in `.env` (e.g., `OPENAI_API_KEY`)
 - Verify ChromaDB exists: run `uv run python -m tomobait.data_ingestion` if needed
 
 ### Frontend can't connect
@@ -337,4 +394,4 @@ All data is stored under `.bait-{project.name}/` (default: `.bait-tomo/`):
 ### No documents retrieved
 - Verify project data directory exists (e.g., `.bait-tomo/`)
 - Re-run ingestion: `uv run python -m tomobait.data_ingestion`
-- Check that the embedding model/provider matches between ingestion and retrieval (both must use the same config)
+- Check that the embedding model/provider matches between ingestion and retrieval

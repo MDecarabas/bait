@@ -5,7 +5,7 @@ import pytest
 
 def test_build_llm_client_openai():
     """build_llm_client with api_type='openai' should return an OpenAI client."""
-    from tomobait.utils import build_llm_client, _client_cache
+    from tomobait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
@@ -21,7 +21,7 @@ def test_build_llm_client_openai():
 
 def test_build_llm_client_anthropic():
     """build_llm_client with api_type='anthropic' should return an Anthropic client."""
-    from tomobait.utils import build_llm_client, _client_cache
+    from tomobait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
@@ -37,7 +37,7 @@ def test_build_llm_client_anthropic():
 
 def test_build_llm_client_unknown_raises():
     """build_llm_client with unknown api_type should raise ValueError."""
-    from tomobait.utils import build_llm_client, _client_cache
+    from tomobait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
@@ -51,7 +51,7 @@ def test_build_llm_client_unknown_raises():
 
 def test_build_llm_client_caching():
     """Same settings should return the same client instance (cached)."""
-    from tomobait.utils import build_llm_client, _client_cache
+    from tomobait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
