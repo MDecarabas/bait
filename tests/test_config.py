@@ -72,20 +72,62 @@ def test_get_agent_llm_settings(write_config):
     assert settings["argo_base_url"] == "http://custom"
 
 
-def test_bits_skills_dir_with_path(write_config):
+def test_bits_skills_dir_default(write_config):
+    """No override → {bits.path}/.claude/skills/ophyd-device-control."""
     write_config(extra={"bits": {"path": "/some/path"}})
     from bait.config import BaitConfig
 
     config = BaitConfig()
-    assert config.bits_skills_dir == Path("/some/path")
+    assert config.bits_skills_dir == Path(
+        "/some/path/.claude/skills/ophyd-device-control"
+    )
 
 
-def test_bits_skills_dir_empty(write_config):
-    write_config(extra={"bits": {"path": ""}})
+def test_bits_skills_dir_override(write_config):
+    """`bits.skills_dir` overrides the computed default."""
+    write_config(extra={"bits": {"path": "/some/path", "skills_dir": "/custom/skills"}})
     from bait.config import BaitConfig
 
     config = BaitConfig()
-    assert config.bits_skills_dir == Path(".")
+    assert config.bits_skills_dir == Path("/custom/skills")
+
+
+def test_queueserver_script_default(write_config):
+    write_config(extra={"bits": {"path": "/some/path", "instrument_name": "tomo_2bm"}})
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.queueserver_script == Path("/some/path/scripts/tomo_2bm_qs_host.sh")
+
+
+def test_queueserver_script_override(write_config):
+    write_config(
+        extra={"bits": {"path": "/some/path", "queueserver_script": "/x/qs.sh"}}
+    )
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.queueserver_script == Path("/x/qs.sh")
+
+
+def test_oas_startup_file_default(write_config):
+    """No override → bundled default_oas_startup.py from bait.devices."""
+    write_config(extra={"bits": {"path": "/some/path"}})
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.oas_startup_file.name == "default_oas_startup.py"
+    assert config.oas_startup_file.is_file()
+
+
+def test_oas_startup_file_override(write_config):
+    write_config(
+        extra={"bits": {"path": "/some/path", "oas_startup_file": "/x/start.py"}}
+    )
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.oas_startup_file == Path("/x/start.py")
 
 
 # --- BAIT_CONFIG env override ---

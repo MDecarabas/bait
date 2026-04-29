@@ -33,6 +33,8 @@ dependencies = [
     "langchain-text-splitters>=1.0.0,<2",
     "langchain_openai",
     "fastapi",
+    "httpx",
+    "bluesky-httpserver",
     "uvicorn>=0.29.0,<0.30",
     "gradio>=5.23",
     "requests",
@@ -54,8 +56,6 @@ dev = [
 bait-backend = "bait.app:main"
 bait-frontend = "bait.frontend:main"
 bait-ingest = "bait.data_ingestion:main"
-start-backend = "bait.app:main"
-start-frontend = "bait.frontend:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

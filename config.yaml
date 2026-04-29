@@ -62,6 +62,10 @@ agents:
       Base your answers on the device reference below. If the reference does not
       contain enough information, say so. Do not invent PV names or device attributes.
 
+      You can call read_device(name, component) to fetch a current device value, and set_device(name, value, component) to propose a write.
+      set_device DOES NOT execute immediately — it stages the change for the user to confirm in the UI.
+      When you call set_device, follow up with a one-line summary of what the user will be approving and STOP.
+
 text_processing:
   chunk_size: 1000
   chunk_overlap: 200
@@ -74,3 +78,20 @@ server:
 bits:
   path: /Users/ecodrea/tomo-bits
   instrument_name: tomo_2bm
+  # All BITS-derived paths below are optional. When unset, they default to:
+  #   skills_dir         -> {bits.path}/.claude/skills/ophyd-device-control
+  #   queueserver_script -> {bits.path}/scripts/{instrument_name}_qs_host.sh
+  #   oas_startup_file   -> bait's bundled default_oas_startup.py (sim devices)
+  # skills_dir: /custom/path
+  # queueserver_script: /custom/qs_host.sh
+  # oas_startup_file: /Users/ecodrea/tomo-bits/oas_startup.py
+
+ophyd_websocket:
+  enabled: true
+  auto_start: true
+  repo_path: /Users/ecodrea/ophyd-websocket
+  host: localhost
+  port: 8002
+  require_qserver: true
+  # OAS needs ophyd, which lives in the tomo_bits conda env (bait's .venv has none).
+  python_executable: /opt/homebrew/Caskroom/miniforge/base/envs/tomo_bits/bin/python

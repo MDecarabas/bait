@@ -24,14 +24,18 @@ def _make_client(monkeypatch, route_question=None):
 @pytest.fixture
 def client(write_config, monkeypatch):
     write_config()
-    return _make_client(monkeypatch, route_question=lambda q: "Test answer")
+    return _make_client(monkeypatch, route_question=lambda q: ("Test answer", []))
 
 
 def test_chat_endpoint(client):
     """POST /chat returns the agent's response."""
     response = client.post("/chat", json={"query": "test question"})
     assert response.status_code == 200
-    assert response.json()["response"] == "Test answer"
+    body = response.json()
+    assert body["response"] == "Test answer"
+    assert body["pending_writes"] is None
+    assert body["pending_id"] is None
+    assert body["qs_alert"] is None
 
 
 def test_save_and_load_chat(client):
@@ -194,3 +198,115 @@ def test_list_chats_skips_corrupted_file(client):
     assert resp.status_code == 200
     titles = [c["title"] for c in resp.json()["chats"]]
     assert any("valid" in t for t in titles)
+
+
+# --- HITL: pending writes + /chat/confirm ---
+
+
+def _staged_write_route(answer="Confirm please", writes=None):
+    writes = writes or [{"name": "motor", "value": 5, "component": None}]
+
+    def _fn(_q):
+        return answer, writes
+
+    return _fn
+
+
+def test_chat_returns_pending_id_when_writes_proposed(write_config, monkeypatch):
+    write_config()
+    client = _make_client(monkeypatch, route_question=_staged_write_route())
+    resp = client.post("/chat", json={"query": "set motor to 5"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pending_id"], "expected a UUID pending_id"
+    assert body["pending_writes"] == [{"name": "motor", "value": 5, "component": None}]
+
+
+def test_confirm_approved_executes_writes(write_config, monkeypatch):
+    """Approved confirm calls OASClient.set_device once per staged write."""
+    write_config()
+
+    calls = []
+
+    class FakeOAS:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def set_device(self, name, value, component=None, timeout=5):
+            calls.append((name, value, component))
+            return {"ok": True, "result": {"success": True}}
+
+    client = _make_client(monkeypatch, route_question=_staged_write_route())
+    monkeypatch.setattr("bait.app.OASClient", FakeOAS)
+
+    chat = client.post("/chat", json={"query": "set motor to 5"}).json()
+    pid = chat["pending_id"]
+
+    resp = client.post("/chat/confirm", json={"pending_id": pid, "approved": True})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["denied"] is False
+    assert calls == [("motor", 5, None)]
+    assert body["results"][0]["result"]["ok"] is True
+
+
+def test_confirm_denied_does_not_execute(write_config, monkeypatch):
+    """Denied confirm pops the staged writes without calling OAS."""
+    write_config()
+
+    class BoomOAS:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def set_device(self, *_a, **_kw):
+            raise AssertionError("set_device should not be called when denied")
+
+    client = _make_client(monkeypatch, route_question=_staged_write_route())
+    monkeypatch.setattr("bait.app.OASClient", BoomOAS)
+
+    chat = client.post("/chat", json={"query": "set motor to 5"}).json()
+    pid = chat["pending_id"]
+
+    resp = client.post("/chat/confirm", json={"pending_id": pid, "approved": False})
+    assert resp.status_code == 200
+    assert resp.json() == {"results": [], "denied": True}
+
+
+def test_confirm_unknown_pending_id_404(write_config, monkeypatch):
+    write_config()
+    client = _make_client(monkeypatch, route_question=lambda q: ("ok", []))
+    resp = client.post(
+        "/chat/confirm", json={"pending_id": "doesnotexist", "approved": True}
+    )
+    assert resp.status_code == 404
+
+
+def test_chat_includes_qs_alert_when_qs_down(write_config, monkeypatch):
+    """If QS is unreachable AND writes are staged, the response carries the alert."""
+    write_config()
+    client = _make_client(monkeypatch, route_question=_staged_write_route())
+    monkeypatch.setattr(
+        "bait.app.check_queueserver",
+        lambda _cfg: (False, "Queue server is not running. Start it with: bash X"),
+    )
+
+    body = client.post("/chat", json={"query": "set motor to 5"}).json()
+    assert body["qs_alert"]
+    assert "queue server" in body["qs_alert"].lower()
+
+
+def test_chat_no_qs_alert_when_no_pending_writes(write_config, monkeypatch):
+    """If no writes are staged we don't bother checking QS — keeps reads cheap."""
+    write_config()
+    qs_calls = []
+
+    def _check(_cfg):
+        qs_calls.append(1)
+        return False, "should not appear"
+
+    client = _make_client(monkeypatch, route_question=lambda q: ("plain answer", []))
+    monkeypatch.setattr("bait.app.check_queueserver", _check)
+
+    body = client.post("/chat", json={"query": "what's up"}).json()
+    assert body["qs_alert"] is None
+    assert qs_calls == []

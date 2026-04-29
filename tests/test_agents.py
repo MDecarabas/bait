@@ -30,6 +30,25 @@ class FakeRetriever:
         return self.results
 
 
+class FakeOASClient:
+    """In-memory OAS stand-in. Records set_device calls; returns canned reads."""
+
+    def __init__(self, read_value=42):
+        self._read_value = read_value
+        self.read_calls: list[tuple[str, str | None]] = []
+        self.set_calls: list[dict] = []
+
+    def read_device(self, name, component=None):
+        self.read_calls.append((name, component))
+        return {"ok": True, "value": self._read_value, "connected": True}
+
+    def set_device(self, name, value, component=None, timeout=5):
+        self.set_calls.append(
+            {"name": name, "value": value, "component": component, "timeout": timeout}
+        )
+        return {"ok": True, "result": {"success": True}}
+
+
 def _scripted_llm_chat(scripts: dict[str, list[dict]]):
     """Return a llm_chat_fn that pops scripted responses keyed by prompt key."""
     counters: dict[str, int] = {k: 0 for k in scripts}
@@ -63,7 +82,12 @@ def make_graph(base_config, fake_clients):
 
     router_c, doc_c, bits_c = fake_clients
 
-    def _build(scripts, retriever=None, device_skills="some device skills"):
+    def _build(
+        scripts,
+        retriever=None,
+        device_skills="some device skills",
+        oas_client=None,
+    ):
         return build_graph(
             base_config,
             llm_chat_fn=_scripted_llm_chat(scripts),
@@ -72,6 +96,7 @@ def make_graph(base_config, fake_clients):
             doc_client=doc_c,
             bits_client=bits_c,
             device_skills=device_skills,
+            oas_client=oas_client or FakeOASClient(),
         )
 
     return _build
@@ -115,6 +140,7 @@ def test_build_graph_returns_compiled(base_config, fake_clients):
         doc_client=doc_c,
         bits_client=bits_c,
         device_skills="",
+        oas_client=FakeOASClient(),
     )
     assert graph is not None
     assert hasattr(graph, "invoke")
@@ -159,9 +185,12 @@ def test_route_question_doc_path(make_graph):
         retriever=retriever,
     )
 
-    answer = route_question("how do I configure the sample stage?", graph=graph)
+    answer, pending = route_question(
+        "how do I configure the sample stage?", graph=graph
+    )
     assert "sample stage" in answer.lower()
     assert retriever.calls == ["sample stage"]
+    assert pending == []
 
 
 # --- R2: bits routing ---
@@ -188,9 +217,10 @@ def test_route_question_bits_path(make_graph):
         device_skills="m1, m2, m3 are the motors.",
     )
 
-    answer = route_question("what motors are available?", graph=graph)
+    answer, pending = route_question("what motors are available?", graph=graph)
     assert "motor" in answer.lower()
     assert "m1" in answer
+    assert pending == []
 
 
 # --- Doc tool loop cap ---
@@ -223,8 +253,9 @@ def test_doc_tool_loop_capped_at_max_iterations(make_graph):
         retriever=retriever,
     )
 
-    answer = route_question("infinite tool loop", graph=graph)
+    answer, pending = route_question("infinite tool loop", graph=graph)
     assert answer == DOC_LOOP_FALLBACK
+    assert pending == []
     # Sanity: we capped, so the retriever was hit exactly MAX times.
     assert len(retriever.calls) == MAX_DOC_TOOL_ITERATIONS
 
@@ -247,5 +278,174 @@ def test_router_fallback_on_unknown_class(make_graph):
             ],
         }
     )
-    answer = route_question("???", graph=graph)
+    answer, pending = route_question("???", graph=graph)
     assert answer == "doc answer"
+    assert pending == []
+
+
+# --- BITS agent tool calling ---
+
+
+def _bits_tool_call(name: str, arguments: dict, call_id: str = "tc"):
+    return {
+        "text": None,
+        "tool_calls": [{"id": call_id, "name": name, "arguments": arguments}],
+        "stop": False,
+        "_assistant_msg": {"role": "assistant", "content": ""},
+    }
+
+
+def test_bits_read_tool_returns_value(make_graph):
+    """A device read flows through OASClient and is summarised by the LLM."""
+    from bait.agents import route_question
+
+    oas = FakeOASClient(read_value=1.5)
+    graph = make_graph(
+        scripts={
+            "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
+            "expert on this project": [
+                {"text": "n/a", "tool_calls": None, "stop": True}
+            ],
+            "expert on BITS": [
+                _bits_tool_call(
+                    "read_device", {"name": "tomoscan", "component": "rotation_start"}
+                ),
+                {"text": "rotation_start is at 1.5", "tool_calls": None, "stop": True},
+            ],
+        },
+        oas_client=oas,
+    )
+
+    answer, pending = route_question("what is rotation_start?", graph=graph)
+    assert pending == []
+    assert "1.5" in answer
+    assert oas.read_calls == [("tomoscan", "rotation_start")]
+    assert oas.set_calls == []
+
+
+def test_bits_set_stages_pending_write(make_graph):
+    """A set_device call stages the write — the OAS client is never hit."""
+    from bait.agents import route_question
+
+    oas = FakeOASClient()
+    graph = make_graph(
+        scripts={
+            "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
+            "expert on this project": [
+                {"text": "n/a", "tool_calls": None, "stop": True}
+            ],
+            "expert on BITS": [
+                _bits_tool_call(
+                    "set_device",
+                    {"name": "tomoscan", "value": 5.0, "component": "rotation_start"},
+                ),
+                {
+                    "text": "I'll set rotation_start to 5.0; please confirm.",
+                    "tool_calls": None,
+                    "stop": True,
+                },
+            ],
+        },
+        oas_client=oas,
+    )
+
+    answer, pending = route_question("set rotation_start to 5", graph=graph)
+    assert oas.set_calls == [], "set_device must not be executed by the agent loop"
+    assert len(pending) == 1
+    assert pending[0]["name"] == "tomoscan"
+    assert pending[0]["value"] == 5.0
+    assert pending[0]["component"] == "rotation_start"
+    assert "confirm" in answer.lower()
+
+
+def test_bits_set_with_no_component_stages_correctly(make_graph):
+    """Component is optional; stages a top-level device write."""
+    from bait.agents import route_question
+
+    oas = FakeOASClient()
+    graph = make_graph(
+        scripts={
+            "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
+            "expert on this project": [
+                {"text": "n/a", "tool_calls": None, "stop": True}
+            ],
+            "expert on BITS": [
+                _bits_tool_call("set_device", {"name": "motor", "value": 10}),
+                {"text": "Proposing motor=10.", "tool_calls": None, "stop": True},
+            ],
+        },
+        oas_client=oas,
+    )
+
+    _, pending = route_question("move motor to 10", graph=graph)
+    assert len(pending) == 1
+    assert pending[0]["component"] is None
+    assert oas.set_calls == []
+
+
+def test_bits_loop_capped(make_graph):
+    """A model that keeps calling read_device returns the BITS fallback."""
+    from bait.agents import (
+        BITS_LOOP_FALLBACK,
+        MAX_BITS_TOOL_ITERATIONS,
+        route_question,
+    )
+
+    looping = _bits_tool_call("read_device", {"name": "x"}, call_id="loop")
+    oas = FakeOASClient()
+    graph = make_graph(
+        scripts={
+            "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
+            "expert on this project": [
+                {"text": "n/a", "tool_calls": None, "stop": True}
+            ],
+            "expert on BITS": [looping] * (MAX_BITS_TOOL_ITERATIONS + 5),
+        },
+        oas_client=oas,
+    )
+
+    answer, pending = route_question("loop forever", graph=graph)
+    assert answer == BITS_LOOP_FALLBACK
+    assert pending == []
+    assert len(oas.read_calls) == MAX_BITS_TOOL_ITERATIONS
+
+
+def test_bits_empty_answer_fallback_when_writes_pending(make_graph):
+    """If the LLM only stages a write and never produces text, synthesise a prompt."""
+    from bait.agents import route_question
+
+    graph = make_graph(
+        scripts={
+            "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
+            "expert on this project": [
+                {"text": "n/a", "tool_calls": None, "stop": True}
+            ],
+            "expert on BITS": [
+                _bits_tool_call("set_device", {"name": "motor", "value": 1}),
+                # Final turn: no text, no tool calls. Should hit the fallback.
+                {"text": "", "tool_calls": None, "stop": True},
+            ],
+        },
+    )
+
+    answer, pending = route_question("set motor to 1", graph=graph)
+    assert "confirm" in answer.lower()
+    assert len(pending) == 1
+
+
+def test_skills_dir_loads_recursive_md_files(tmp_path):
+    """`_load_device_skills` walks subdirectories and joins all .md files."""
+    from bait.agents import _load_device_skills
+
+    (tmp_path / "SKILL.md").write_text("# Top-level skill")
+    refs = tmp_path / "references"
+    refs.mkdir()
+    (refs / "foo.md").write_text("foo content")
+    (refs / "bar.md").write_text("bar content")
+    (tmp_path / "ignore_me.txt").write_text("not markdown")
+
+    combined = _load_device_skills(tmp_path)
+    assert "Top-level skill" in combined
+    assert "foo content" in combined
+    assert "bar content" in combined
+    assert "not markdown" not in combined
