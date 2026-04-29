@@ -25,8 +25,7 @@ ARGO_MODEL = os.getenv("ARGO_MODEL", "gpt4o")  # Default to gpt4o
 def requires_argo_credentials():
     """Skip decorator for tests requiring Argo credentials."""
     return pytest.mark.skipif(
-        not ARGO_USER,
-        reason="ARGO_USER environment variable not set"
+        not ARGO_USER, reason="ARGO_USER environment variable not set"
     )
 
 
@@ -89,36 +88,39 @@ class TestArgoToolCalling:
 
     def test_tool_definition(self, argo_client, argo_model):
         """Test that tools can be defined and processed."""
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "query_documentation",
-                "description": (
-                    "Query the documentation database"
-                    " for relevant information"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query for the documentation"
-                        }
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "query_documentation",
+                    "description": (
+                        "Query the documentation database for relevant information"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query for the documentation",
+                            }
+                        },
+                        "required": ["query"],
                     },
-                    "required": ["query"]
-                }
+                },
             }
-        }]
+        ]
 
         response = argo_client.chat.completions.create(
             model=argo_model,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Please search the documentation"
-                    " for tomography setup instructions"
-                )
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Please search the documentation"
+                        " for tomography setup instructions"
+                    ),
+                }
+            ],
             tools=tools,
             max_tokens=200,
         )
@@ -129,27 +131,31 @@ class TestArgoToolCalling:
 
     def test_tool_call_format(self, argo_client, argo_model):
         """Test that tool calls have correct format when triggered."""
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather for a location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string", "description": "City name"}
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string", "description": "City name"}
+                        },
+                        "required": ["location"],
                     },
-                    "required": ["location"]
-                }
+                },
             }
-        }]
+        ]
 
         response = argo_client.chat.completions.create(
             model=argo_model,
-            messages=[{
-                "role": "user",
-                "content": "What's the weather in Chicago? Use the get_weather tool."
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather in Chicago? Use the get_weather tool.",
+                }
+            ],
             tools=tools,
             tool_choice="auto",
             max_tokens=200,
@@ -183,14 +189,10 @@ class TestArgoMultiTurn:
         )
 
         # Add assistant response and follow-up
-        messages.append({
-            "role": "assistant",
-            "content": response1.choices[0].message.content
-        })
-        messages.append({
-            "role": "user",
-            "content": "What is my name?"
-        })
+        messages.append(
+            {"role": "assistant", "content": response1.choices[0].message.content}
+        )
+        messages.append({"role": "user", "content": "What is my name?"})
 
         # Second turn - should remember the name
         response2 = argo_client.chat.completions.create(
@@ -210,11 +212,13 @@ class TestArgoAutogenIntegration:
     def test_autogen_config_creation(self, argo_model):
         """Test creating an Autogen LLM config for Argo."""
         llm_config = {
-            "config_list": [{
-                "model": argo_model,
-                "base_url": ARGO_BASE_URL,
-                "api_key": ARGO_USER,
-            }]
+            "config_list": [
+                {
+                    "model": argo_model,
+                    "base_url": ARGO_BASE_URL,
+                    "api_key": ARGO_USER,
+                }
+            ]
         }
 
         # Verify config structure
@@ -228,11 +232,13 @@ class TestArgoAutogenIntegration:
         from autogen import AssistantAgent
 
         llm_config = {
-            "config_list": [{
-                "model": argo_model,
-                "base_url": ARGO_BASE_URL,
-                "api_key": ARGO_USER,
-            }]
+            "config_list": [
+                {
+                    "model": argo_model,
+                    "base_url": ARGO_BASE_URL,
+                    "api_key": ARGO_USER,
+                }
+            ]
         }
 
         agent = AssistantAgent(

@@ -4,8 +4,8 @@ import pytest
 
 
 def test_build_llm_client_openai():
-    """build_llm_client with api_type='openai' should return an OpenAI client."""
-    from tomobait.utils import _client_cache, build_llm_client
+    """build_llm_client with api_type='openai' returns an OpenAI client."""
+    from bait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
@@ -19,9 +19,20 @@ def test_build_llm_client_openai():
     assert isinstance(client, OpenAI)
 
 
+def test_build_llm_client_openai_has_timeout():
+    """OpenAI client built by Bait carries the 30s timeout."""
+    from bait.utils import LLM_TIMEOUT_SECONDS, _client_cache, build_llm_client
+
+    _client_cache.clear()
+    client = build_llm_client(
+        {"api_type": "openai", "api_key": "k", "argo_base_url": "http://u"}
+    )
+    assert client.timeout == LLM_TIMEOUT_SECONDS
+
+
 def test_build_llm_client_anthropic():
-    """build_llm_client with api_type='anthropic' should return an Anthropic client."""
-    from tomobait.utils import _client_cache, build_llm_client
+    """build_llm_client with api_type='anthropic' returns an Anthropic client."""
+    from bait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
@@ -35,9 +46,20 @@ def test_build_llm_client_anthropic():
     assert isinstance(client, Anthropic)
 
 
+def test_build_llm_client_anthropic_has_timeout():
+    """Anthropic client built by Bait carries the 30s timeout."""
+    from bait.utils import LLM_TIMEOUT_SECONDS, _client_cache, build_llm_client
+
+    _client_cache.clear()
+    client = build_llm_client(
+        {"api_type": "anthropic", "api_key": "k", "argo_base_url": "http://u"}
+    )
+    assert client.timeout == LLM_TIMEOUT_SECONDS
+
+
 def test_build_llm_client_unknown_raises():
-    """build_llm_client with unknown api_type should raise ValueError."""
-    from tomobait.utils import _client_cache, build_llm_client
+    """build_llm_client with unknown api_type raises ValueError."""
+    from bait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {
@@ -50,8 +72,8 @@ def test_build_llm_client_unknown_raises():
 
 
 def test_build_llm_client_caching():
-    """Same settings should return the same client instance (cached)."""
-    from tomobait.utils import _client_cache, build_llm_client
+    """Same settings return the same cached client instance."""
+    from bait.utils import _client_cache, build_llm_client
 
     _client_cache.clear()
     settings = {

@@ -1,58 +1,40 @@
-"""Tests for FastAPI app endpoints (chat history CRUD).
+"""Tests for FastAPI app endpoints (chat history CRUD + error paths)."""
 
-These tests mock the agents module to avoid module-level LLM client initialization.
-"""
-
-import sys
-import types
-from unittest.mock import MagicMock
+import importlib
 
 import pytest
-import yaml
 
 
-@pytest.fixture(autouse=True)
-def mock_agents(monkeypatch):
-    """Mock the agents module before app.py imports it."""
-    fake_agents = types.ModuleType("tomobait.agents")
-    fake_agents.route_question = MagicMock(return_value="Test answer")
-    monkeypatch.setitem(sys.modules, "tomobait.agents", fake_agents)
+def _make_client(monkeypatch, route_question=None):
+    """Build a FastAPI TestClient with route_question patched."""
+    import bait.agents
+    import bait.app
 
+    importlib.reload(bait.agents)
+    importlib.reload(bait.app)
 
-@pytest.fixture
-def tmp_config(tmp_path, monkeypatch):
-    """Create a temporary config environment for testing."""
-    config_data = {
-        "project": {"name": "test", "data_dir": str(tmp_path / ".bait-test")},
-    }
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump(config_data))
-    monkeypatch.chdir(tmp_path)
+    if route_question is not None:
+        monkeypatch.setattr(bait.app, "route_question", route_question)
 
-
-@pytest.fixture
-def client(tmp_config):
-    """Create a test client."""
-    # Import after agents is mocked and config is set up
-    import importlib
-
-    import tomobait.app
-
-    importlib.reload(tomobait.app)
     from fastapi.testclient import TestClient
 
-    return TestClient(tomobait.app.api)
+    return TestClient(bait.app.api)
+
+
+@pytest.fixture
+def client(write_config, monkeypatch):
+    write_config()
+    return _make_client(monkeypatch, route_question=lambda q: "Test answer")
 
 
 def test_chat_endpoint(client):
-    """POST /chat should return a response from the agent."""
+    """POST /chat returns the agent's response."""
     response = client.post("/chat", json={"query": "test question"})
     assert response.status_code == 200
     assert response.json()["response"] == "Test answer"
 
 
 def test_save_and_load_chat(client):
-    """Save a chat, then load it back."""
     save_response = client.post(
         "/chat/save",
         json={
@@ -74,19 +56,16 @@ def test_save_and_load_chat(client):
 
 
 def test_list_chats(client):
-    """List chats should return saved conversations."""
     client.post(
         "/chat/save",
         json={"messages": [{"role": "user", "content": "test"}]},
     )
     response = client.get("/chat/history")
     assert response.status_code == 200
-    chats = response.json()["chats"]
-    assert len(chats) >= 1
+    assert len(response.json()["chats"]) >= 1
 
 
 def test_delete_chat(client):
-    """Delete a chat should remove it."""
     save_resp = client.post(
         "/chat/save",
         json={"messages": [{"role": "user", "content": "delete me"}]},
@@ -101,13 +80,11 @@ def test_delete_chat(client):
 
 
 def test_load_missing_chat_returns_404(client):
-    """Loading a non-existent chat should return 404."""
     response = client.get("/chat/history/nonexistent-id")
     assert response.status_code == 404
 
 
 def test_auto_title_generation(client):
-    """Save without title should auto-generate from first user message."""
     response = client.post(
         "/chat/save",
         json={
@@ -118,5 +95,102 @@ def test_auto_title_generation(client):
         },
     )
     assert response.status_code == 200
-    title = response.json()["title"]
-    assert "sample stage" in title.lower()
+    assert "sample stage" in response.json()["title"].lower()
+
+
+# --- Phase 1a: Argo failure → 503 ---
+
+
+def _argo_error(exc_cls):
+    def _raise(_q):
+        raise exc_cls(request=None, message="boom")  # type: ignore[arg-type]
+
+    return _raise
+
+
+def test_chat_endpoint_handles_api_timeout(write_config, monkeypatch):
+    """APITimeoutError → 503 with the user-facing message."""
+    write_config()
+    from openai import APITimeoutError
+
+    def _timeout(_q):
+        raise APITimeoutError(request=None)  # type: ignore[arg-type]
+
+    client = _make_client(monkeypatch, route_question=_timeout)
+    resp = client.post("/chat", json={"query": "x"})
+    assert resp.status_code == 503
+    assert "temporarily unavailable" in resp.json()["detail"].lower()
+
+
+def test_chat_endpoint_handles_api_connection_error(write_config, monkeypatch):
+    """APIConnectionError → 503."""
+    write_config()
+    from openai import APIConnectionError
+
+    def _conn(_q):
+        raise APIConnectionError(request=None)  # type: ignore[arg-type]
+
+    client = _make_client(monkeypatch, route_question=_conn)
+    resp = client.post("/chat", json={"query": "x"})
+    assert resp.status_code == 503
+
+
+def test_chat_endpoint_handles_api_status_error(write_config, monkeypatch):
+    """APIStatusError → 503."""
+    write_config()
+    from unittest.mock import MagicMock
+
+    from openai import APIStatusError
+
+    def _status(_q):
+        response = MagicMock()
+        response.status_code = 502
+        raise APIStatusError(message="bad gateway", response=response, body=None)
+
+    client = _make_client(monkeypatch, route_question=_status)
+    resp = client.post("/chat", json={"query": "x"})
+    assert resp.status_code == 503
+
+
+# --- Phase 1a: POST /config removed → 405 ---
+
+
+def test_post_config_returns_405(client):
+    """POST /config was removed; only GET is allowed."""
+    resp = client.post("/config", json={})
+    assert resp.status_code == 405
+
+
+# --- R3: path traversal defense ---
+
+
+def test_path_traversal_rejected(client):
+    """R3: a traversal-y chat_id returns 400, not 404 or success."""
+    resp = client.get("/chat/history/..%2F..%2Fetc%2Fpasswd")
+    assert resp.status_code == 400
+
+
+def test_path_traversal_rejected_on_delete(client):
+    """Same defense applies to DELETE."""
+    resp = client.delete("/chat/history/..%2F..%2Fetc%2Fpasswd")
+    assert resp.status_code == 400
+
+
+# --- Corrupted chat history file is skipped, not crashed on ---
+
+
+def test_list_chats_skips_corrupted_file(client):
+    """A bogus .json file in the history dir doesn't take down the endpoint."""
+    # Save one valid chat first.
+    client.post("/chat/save", json={"messages": [{"role": "user", "content": "valid"}]})
+
+    # Drop a corrupted file alongside it.
+    import bait.app
+
+    cfg = bait.app.get_config()
+    (cfg.chat_history_dir / "broken.json").write_text("{ not valid json")
+
+    resp = client.get("/chat/history")
+    assert resp.status_code == 200
+    titles = [c["title"] for c in resp.json()["chats"]]
+    assert any("valid" in t for t in titles)

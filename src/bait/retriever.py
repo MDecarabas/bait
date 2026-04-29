@@ -1,36 +1,35 @@
+"""Vector-store retriever used by the documentation agent."""
+
 import sys
 
 from langchain_chroma import Chroma
 
-from .config import BaitConfig
+from .config import BaitConfig, get_config
 from .utils import get_embeddings
 
-# Load configuration
-config = BaitConfig()
 
+def get_documentation_retriever(config: BaitConfig | None = None):
+    """Return a retriever bound to the configured ChromaDB.
 
-def get_documentation_retriever():
+    Pass ``config`` for tests or alternate beamline contexts; otherwise the
+    cached process config is used.
     """
-    Initializes and returns a retriever for our ChromaDB.
-    """
+    if config is None:
+        config = get_config()
 
     embeddings = get_embeddings(config)
     print(f"Loading embedding model: {config.embedding.model}")
-    # Initialize the same embedding model
 
     db_path = str(config.db_path)
     print(f"Connecting to vector store at: {db_path}")
-    # Connect to the existing, persisted database
     vectorstore = Chroma(persist_directory=db_path, embedding_function=embeddings)
 
-    print("✅ Retriever is ready.")
+    print("Retriever is ready.")
 
-    # Build search kwargs based on config
     search_kwargs = {"k": config.retriever.k}
     if config.retriever.score_threshold is not None:
         search_kwargs["score_threshold"] = config.retriever.score_threshold
 
-    # Create a retriever object
     return vectorstore.as_retriever(
         search_type=config.retriever.search_type, search_kwargs=search_kwargs
     )
@@ -38,18 +37,12 @@ def get_documentation_retriever():
 
 # --- Test Block ---
 if __name__ == "__main__":
-    """
-    This lets us test the retriever function by running:
-    python retriever.py "your test question"
-    """
     if len(sys.argv) > 1:
         query = " ".join(sys.argv[1:])
         print("\n--- Testing Retriever ---")
         print(f"Query: '{query}'")
 
         retriever = get_documentation_retriever()
-
-        # 'invoke' runs the retriever and gets the docs
         results = retriever.invoke(query)
 
         print(f"\nFound {len(results)} relevant documents:")
@@ -59,4 +52,4 @@ if __name__ == "__main__":
             print(f"(Source: {doc.metadata.get('source', 'unknown')})")
             print("------------------")
     else:
-        print('Usage: python retriever.py "Your test query here"')
+        print('Usage: python -m bait.retriever "Your test query here"')

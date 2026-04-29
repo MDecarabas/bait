@@ -8,7 +8,6 @@ documentation:
   local_folders: []
 
 retriever:
-  embedding_model: sentence-transformers/all-MiniLM-L6-v2
   k: 3
   search_type: similarity
   score_threshold: null

@@ -1,8 +1,7 @@
-"""
-A module for cloning and updating a git repository, and then building its
-Sphinx documentation.
-"""
+"""Clone documentation repos, build Sphinx, and ingest into ChromaDB."""
 
+import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,36 +12,22 @@ from langchain_chroma import Chroma
 from langchain_community.document_loaders import ReadTheDocsLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from .config import BaitConfig
+from .config import BaitConfig, get_config
 from .utils import get_embeddings
-
-# Load configuration
-config = BaitConfig()
 
 
 def ingest_git_documentation(repo_url: str, documentation_dir: Union[str, Path]):
-    """
-    Clones a repository if it doesn't exist, or pulls the latest changes if it does.
-    Then, it builds the Sphinx documentation.
-
-    Args:
-        repo_url (str): The URL of the git repository to clone.
-        documentation_dir (Union[str, Path]): The path to the directory where the
-            documentation and repository will be stored.
-    """
+    """Clone or pull a git repo, then build its Sphinx docs."""
     documentation_dir = Path(documentation_dir)
-
-    # Get the last part and remove the specific suffix
     repo_name = repo_url.split("/")[-1].removesuffix(".git")
     repo_dir = documentation_dir / repo_name
 
-    # --- 1. Clone or Pull Repository ---
     if not repo_dir.exists():
         print(f"Cloning repository to: {repo_dir}")
         try:
             Repo.clone_from(repo_url, repo_dir)
         except Exception as e:
-            print(f"❌ ERROR: Cloning failed: {e}")
+            print(f"ERROR: Cloning failed: {e}")
             sys.exit(1)
     else:
         print(f"Pulling latest changes in repository: {repo_dir}")
@@ -51,40 +36,34 @@ def ingest_git_documentation(repo_url: str, documentation_dir: Union[str, Path])
             origin = repo.remotes.origin
             origin.pull()
         except Exception as e:
-            print(f"❌ ERROR: Pulling failed: {e}")
+            print(f"ERROR: Pulling failed: {e}")
             sys.exit(1)
 
-    # --- 2. Build Sphinx Documentation ---
     docs_path = repo_dir / "docs"
     if not docs_path.exists():
-        print(f"❌ ERROR: 'docs' directory not found in repository: {docs_path}")
+        print(f"ERROR: 'docs' directory not found in repository: {docs_path}")
         sys.exit(1)
 
-    # It's better to run sphinx-build from the original working directory
-    # and specify the source and output directories.
-    # This avoids issues with `os.chdir`.
     output_dir = docs_path / "_build" / "html"
     command = [
         "sphinx-build",
         "-b",
-        "html",  # Build HTML
-        str(docs_path),  # Source directory
-        str(output_dir),  # Output directory
+        "html",
+        str(docs_path),
+        str(output_dir),
     ]
 
     print(f"Running Sphinx build: {' '.join(command)}")
 
     try:
         subprocess.run(command, check=True, capture_output=True, text=True)
-        print(f"✅ Sphinx build successful. Output in: {output_dir}")
-
+        print(f"Sphinx build successful. Output in: {output_dir}")
     except FileNotFoundError:
-        print("❌ ERROR: 'sphinx-build' command not found.")
+        print("ERROR: 'sphinx-build' command not found.")
         print("Please make sure Sphinx is installed in your Python environment.")
         sys.exit(1)
-
     except subprocess.CalledProcessError as e:
-        print(f"❌ ERROR: Sphinx build failed with code {e.returncode}.")
+        print(f"ERROR: Sphinx build failed with code {e.returncode}.")
         print("\n--- Sphinx Output (stdout) ---")
         print(e.stdout)
         print("\n--- Sphinx Errors (stderr) ---")
@@ -92,18 +71,21 @@ def ingest_git_documentation(repo_url: str, documentation_dir: Union[str, Path])
         sys.exit(1)
 
 
-def load_chunk_embed(HTML_BUILD_DIR: str):
-    print(f"Loading docs from {HTML_BUILD_DIR}...")
-    loader = ReadTheDocsLoader(HTML_BUILD_DIR)
+def load_chunk_embed(html_build_dir: str, config: BaitConfig | None = None):
+    """Load HTML docs, split into chunks, embed, and persist to ChromaDB."""
+    if config is None:
+        config = get_config()
+
+    print(f"Loading docs from {html_build_dir}...")
+    loader = ReadTheDocsLoader(html_build_dir)
     docs = loader.load()
 
     if not docs:
-        print("❌ ERROR: No documents were loaded. Check your HTML_BUILD_DIR.")
+        print("ERROR: No documents were loaded. Check the HTML build directory.")
         sys.exit(1)
 
-    print(f"✅ Loaded {len(docs)} documents.")
+    print(f"Loaded {len(docs)} documents.")
 
-    # This splitter tries to keep paragraphs/sentences together
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=config.text_processing.chunk_size,
         chunk_overlap=config.text_processing.chunk_overlap,
@@ -111,12 +93,12 @@ def load_chunk_embed(HTML_BUILD_DIR: str):
 
     print("Splitting documents into chunks...")
     splits = text_splitter.split_documents(docs)
-    print(f"✅ Split {len(docs)} docs into {len(splits)} chunks.")
+    print(f"Split {len(docs)} docs into {len(splits)} chunks.")
 
     print("Initializing embedding model...")
     embeddings = get_embeddings(config)
     print(
-        f"✅ Using {config.embedding.provider} for embeddings"
+        f"Using {config.embedding.provider} for embeddings"
         f" (model: {config.embedding.model})"
     )
 
@@ -130,37 +112,69 @@ def load_chunk_embed(HTML_BUILD_DIR: str):
             documents=splits, embedding=embeddings, persist_directory=db_path
         )
 
-    print("🎉 All done!")
-    print(f"Your knowledge base is ready and saved in '{db_path}'.")
+    print("All done.")
+    print(f"Knowledge base is ready and saved in '{db_path}'.")
 
 
-if __name__ == "__main__":
-    print("🚀 Starting data ingestion process...")
-    print("Configuration loaded from config.yaml")
+def _wipe_chromadb(config: BaitConfig) -> None:
+    """Remove the ChromaDB directory if it exists. Used by --rebuild."""
+    db_path = config.db_path
+    if db_path.exists():
+        print(f"Wiping existing ChromaDB at {db_path}...")
+        shutil.rmtree(db_path)
+
+
+def run_ingest(config: BaitConfig | None = None, rebuild: bool = False) -> None:
+    """Programmatic ingest entry point.
+
+    With ``rebuild=True``, deletes the ChromaDB before rebuilding so chunks
+    are not duplicated when re-running over an existing index.
+    """
+    if config is None:
+        config = get_config()
+
+    print("Starting data ingestion process...")
     print(f"Project: {config.project.name}")
     print(f"Data directory: {config.data_dir}")
 
+    if rebuild:
+        _wipe_chromadb(config)
+
     docs_output_dir = config.docs_output_dir
 
-    # Process all git repositories
     for repo_url in config.documentation.git_repos:
-        print(f"\n📦 Processing repository: {repo_url}")
+        print(f"\nProcessing repository: {repo_url}")
         ingest_git_documentation(repo_url, docs_output_dir)
-
-        # Load, chunk, and embed from the built HTML
         repo_name = repo_url.split("/")[-1].removesuffix(".git")
         sphinx_path = docs_output_dir / repo_name / "docs" / "_build" / "html"
         if sphinx_path.exists():
-            print(f"\n📚 Loading and embedding documentation from: {sphinx_path}")
-            load_chunk_embed(str(sphinx_path))
+            print(f"\nLoading and embedding documentation from: {sphinx_path}")
+            load_chunk_embed(str(sphinx_path), config=config)
         else:
-            print(f"⚠️  Sphinx build path does not exist: {sphinx_path}")
+            print(f"WARNING: Sphinx build path does not exist: {sphinx_path}")
 
-    # Process all local folders
     for local_folder in config.documentation.local_folders:
-        print(f"\n📁 Processing local folder: {local_folder}")
-        # Local folders are already built, just load and embed
+        print(f"\nProcessing local folder: {local_folder}")
         if Path(local_folder).exists():
-            load_chunk_embed(local_folder)
+            load_chunk_embed(local_folder, config=config)
         else:
-            print(f"⚠️  WARNING: Local folder does not exist: {local_folder}")
+            print(f"WARNING: Local folder does not exist: {local_folder}")
+
+
+def main():
+    """CLI entry point: ``bait-ingest [--rebuild]``."""
+    parser = argparse.ArgumentParser(
+        prog="bait-ingest",
+        description="Clone, build, and embed Bait documentation sources.",
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Wipe the ChromaDB before ingesting so chunks aren't duplicated.",
+    )
+    args = parser.parse_args()
+    run_ingest(rebuild=args.rebuild)
+
+
+if __name__ == "__main__":
+    main()

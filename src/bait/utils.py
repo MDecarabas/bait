@@ -1,8 +1,13 @@
-"""Shared utility/factory functions for TomoBait."""
+"""Shared utility/factory functions for Bait."""
 
 import json
 
 from .config import BaitConfig
+
+# Default request timeout (seconds) for LLM clients. Argo can hang on bad
+# routes; without a timeout the FastAPI worker hangs too. 30s is long enough
+# for a normal completion and short enough to surface failures fast.
+LLM_TIMEOUT_SECONDS = 30
 
 _client_cache: dict[tuple, object] = {}
 
@@ -50,6 +55,7 @@ def build_llm_client(llm_settings: dict):
         client = Anthropic(
             api_key=llm_settings["api_key"],
             base_url=base,
+            timeout=LLM_TIMEOUT_SECONDS,
         )
     elif llm_settings["api_type"] == "openai":
         from openai import OpenAI
@@ -57,6 +63,7 @@ def build_llm_client(llm_settings: dict):
         client = OpenAI(
             api_key=llm_settings["api_key"],
             base_url=llm_settings["argo_base_url"],
+            timeout=LLM_TIMEOUT_SECONDS,
         )
     else:
         raise ValueError(f"Unknown api_type: {llm_settings['api_type']}")
@@ -90,9 +97,7 @@ def llm_chat(
         return _chat_anthropic(
             client, model, max_tokens, system_prompt, messages, tools
         )
-    return _chat_openai(
-        client, model, max_tokens, system_prompt, messages, tools
-    )
+    return _chat_openai(client, model, max_tokens, system_prompt, messages, tools)
 
 
 def _chat_anthropic(client, model, max_tokens, system_prompt, messages, tools):
@@ -133,8 +138,14 @@ def _chat_anthropic(client, model, max_tokens, system_prompt, messages, tools):
 
     # Build raw assistant message for conversation history
     raw_content = [
-        {"type": b.type, **({"text": b.text} if b.type == "text" else
-         {"id": b.id, "name": b.name, "input": b.input})}
+        {
+            "type": b.type,
+            **(
+                {"text": b.text}
+                if b.type == "text"
+                else {"id": b.id, "name": b.name, "input": b.input}
+            ),
+        }
         for b in response.content
     ]
 

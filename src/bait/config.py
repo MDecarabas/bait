@@ -1,30 +1,58 @@
-"""
-Centralized configuration management for TomoBait, using pydantic-settings.
-"""
+"""Centralized configuration management for Bait, using pydantic-settings."""
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict, YamlConfigSettingsSource
+
+
+def _resolve_config_path() -> Path:
+    """Resolve the config.yaml location.
+
+    Order:
+      1. ``BAIT_CONFIG`` env var (must point to an existing file).
+      2. ``./config.yaml`` in the current working directory.
+
+    Raises ``FileNotFoundError`` if neither is found, so a missing config is
+    a loud startup failure instead of silent fallback to defaults.
+    """
+    env_path = os.environ.get("BAIT_CONFIG")
+    if env_path:
+        p = Path(env_path).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"BAIT_CONFIG points to a missing file: {p}")
+        return p
+    p = Path("config.yaml")
+    if not p.is_file():
+        raise FileNotFoundError(
+            "No Bait configuration found. Either set "
+            "BAIT_CONFIG=/abs/path/config.yaml or place config.yaml in the "
+            "current working directory."
+        )
+    return p
 
 
 # --- Pydantic Models for Configuration Sections ---
 class ProjectConfig(BaseModel):
-    """Configuration for project identity and base directories."""
+    """Project identity and base directories."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(
-        default="tomo",
         description="Project identifier name (used in directory naming)",
     )
-    data_dir: str = Field(
-        default=".bait-tomo",
-        description="Base directory for all project data",
+    data_dir: Optional[str] = Field(
+        default=None,
+        description=("Base directory for all project data. Defaults to .bait-{name}."),
     )
 
 
 class DocumentationSourceConfig(BaseModel):
-    """Configuration for documentation sources."""
+    """Documentation source list."""
+
+    model_config = ConfigDict(extra="forbid")
 
     git_repos: List[str] = Field(
         default_factory=list,
@@ -40,7 +68,9 @@ class DocumentationSourceConfig(BaseModel):
 
 
 class RetrieverConfig(BaseModel):
-    """Configuration for the document retriever."""
+    """Document retriever configuration."""
+
+    model_config = ConfigDict(extra="forbid")
 
     k: int = Field(
         default=3, description="Number of documents to retrieve per query", ge=1, le=20
@@ -60,13 +90,15 @@ class RetrieverConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Per-agent configuration: prompt, token limit, and LLM settings."""
 
+    model_config = ConfigDict(extra="forbid")
+
     system_prompt: str = Field(description="System prompt for this agent")
     model: str = Field(
         default="claudeopus46",
         description="Model name for this agent",
     )
     api_type: str = Field(
-        default="anthropic",
+        default="openai",
         description="API protocol: 'openai' or 'anthropic'",
     )
     api_key: str = Field(
@@ -77,61 +109,27 @@ class AgentConfig(BaseModel):
         default="https://apps.inside.anl.gov/argoapi/v1",
         description="Base URL for the LLM API",
     )
+    max_tokens: int = Field(
+        default=4096,
+        description="Max tokens for this agent's responses",
+        ge=1,
+    )
 
 
 class AgentsConfig(BaseModel):
     """Configuration for all agents in the system."""
 
-    router: AgentConfig = Field(
-        default_factory=lambda: AgentConfig(
-            system_prompt=(
-                "You are a question classifier for a beamline instrument system.\n\n"
-                "Classify the user's question into exactly one category:\n"
-                '- "documentation": Questions about beamline documentation, '
-                "experimental procedures, how-to guides, configuration, "
-                "or general usage.\n"
-                '- "device": Questions about ophyd devices, EPICS PVs, signals, '
-                "motors, detectors, shutters, scan parameters, Bluesky plans, "
-                "or hardware interaction.\n\n"
-                "Respond with ONLY the category name, nothing else."
-            ),
-        )
-    )
-    doc_agent: AgentConfig = Field(
-        default_factory=lambda: AgentConfig(
-            system_prompt=(
-                "You are an expert on this project's documentation. "
-                "When answering questions: "
-                "1. Answer based *only* on the context from your "
-                "'query_documentation' tool. "
-                "2. Provide concise but complete responses (2-3 paragraphs). "
-                "3. For 'how to' questions, provide step-by-step numbered "
-                "instructions. "
-                "4. Include relevant source links from the context. "
-                "5. If the context is insufficient, say so. "
-                "Do not make up answers."
-            ),
-        )
-    )
-    bits_agent: AgentConfig = Field(
-        default_factory=lambda: AgentConfig(
-            system_prompt=(
-                "You are an expert on BITS (Beamline Instrument and Tool Suite) "
-                "devices, ophyd signals, EPICS PVs, scan parameters, and Bluesky "
-                "plans for this beamline.\n\n"
-                "Answer questions about devices, their signals, PV names, scan "
-                "configuration, and how to interact with hardware using ophyd "
-                "and Bluesky.\n\n"
-                "Base your answers on the device reference below. If the reference "
-                "does not contain enough information, say so. Do not invent PV "
-                "names or device attributes."
-            ),
-        )
-    )
+    model_config = ConfigDict(extra="forbid")
+
+    router: AgentConfig
+    doc_agent: AgentConfig
+    bits_agent: AgentConfig
 
 
 class TextProcessingConfig(BaseModel):
-    """Configuration for document text processing."""
+    """Document text processing configuration."""
+
+    model_config = ConfigDict(extra="forbid")
 
     chunk_size: int = Field(
         default=1000, description="Size of text chunks in characters", ge=100, le=5000
@@ -142,7 +140,9 @@ class TextProcessingConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
-    """Configuration for server settings."""
+    """Server settings."""
+
+    model_config = ConfigDict(extra="forbid")
 
     backend_host: str = Field(default="127.0.0.1", description="Backend server host")
     backend_port: int = Field(default=8001, description="Backend server port")
@@ -151,7 +151,9 @@ class ServerConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    """Configuration for embedding model."""
+    """Embedding model configuration."""
+
+    model_config = ConfigDict(extra="forbid")
 
     api_key: str = Field(
         default="",
@@ -180,29 +182,34 @@ class EmbeddingConfig(BaseModel):
 
 
 class BITSConfig(BaseModel):
-    """Configuration for BITS instrument integration."""
+    """BITS instrument integration."""
 
-    path: str = Field(default="", description="Absolute path to the BITS root folder")
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="Absolute path to the BITS root folder")
     instrument_name: str = Field(
         default="", description="Python package name (e.g., 'tomo_2bm')"
     )
 
 
 class BaitConfig(BaseSettings):
-    """Main configuration for TomoBait, loaded from config.yaml."""
+    """Main configuration for Bait, loaded from config.yaml."""
 
-    model_config = SettingsConfigDict(yaml_file="config.yaml")
+    model_config = SettingsConfigDict(
+        yaml_file="config.yaml",
+        extra="forbid",
+    )
 
-    project: ProjectConfig = Field(default_factory=ProjectConfig)
+    project: ProjectConfig
+    bits: BITSConfig
     documentation: DocumentationSourceConfig = Field(
         default_factory=DocumentationSourceConfig
     )
     retriever: RetrieverConfig = Field(default_factory=RetrieverConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
-    agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    agents: AgentsConfig
     text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
-    bits: BITSConfig = Field(default_factory=BITSConfig)
 
     def model_post_init(self, __context) -> None:
         """Create all necessary directories after the model is initialized."""
@@ -216,31 +223,33 @@ class BaitConfig(BaseSettings):
     @computed_field
     @property
     def data_dir(self) -> Path:
-        """Get the resolved data directory path."""
-        return Path(self.project.data_dir)
+        """Resolved data directory path. Defaults to .bait-{project.name}."""
+        if self.project.data_dir:
+            return Path(self.project.data_dir)
+        return Path(f".bait-{self.project.name}")
 
     @computed_field
     @property
     def docs_output_dir(self) -> Path:
-        """Get the resolved documentation output directory path."""
+        """Resolved documentation output directory path."""
         return self.data_dir / "documentation"
 
     @computed_field
     @property
     def db_path(self) -> Path:
-        """Get the resolved ChromaDB path."""
+        """Resolved ChromaDB path."""
         return self.data_dir / "chroma_db"
 
     @computed_field
     @property
     def chat_history_dir(self) -> Path:
-        """Get the resolved chat history directory path."""
+        """Resolved chat history directory path."""
         return self.data_dir / "chat_history"
 
     @computed_field
     @property
     def bits_skills_dir(self) -> Path:
-        """Get the BITS root folder where skills files are written."""
+        """BITS root folder where device_skills.md lives."""
         return Path(self.bits.path) if self.bits.path else Path(".")
 
     def get_agent_llm_settings(self, agent_name: str) -> dict:
@@ -262,9 +271,34 @@ class BaitConfig(BaseSettings):
         dotenv_settings,
         file_secret_settings,
     ):
-        """Define the source loading priority, using YAML as the primary source."""
+        """Resolve the YAML source from BAIT_CONFIG or ./config.yaml.
+
+        Resolution happens on each instantiation (not at class-definition
+        time) so tests and runtime config switching both work.
+        """
+        yaml_path = _resolve_config_path()
         return (
             init_settings,
-            YamlConfigSettingsSource(settings_cls),
+            YamlConfigSettingsSource(settings_cls, yaml_file=str(yaml_path)),
             file_secret_settings,
         )
+
+
+# Process-wide BaitConfig singleton. A plain module global is honest about what
+# `@lru_cache(maxsize=1)` was already doing and gives tests one place to reset.
+
+_config: BaitConfig | None = None
+
+
+def get_config() -> BaitConfig:
+    """Return the process-wide BaitConfig, instantiating on first call."""
+    global _config
+    if _config is None:
+        _config = BaitConfig()
+    return _config
+
+
+def reset_config_cache() -> None:
+    """Test-only: drop the cached BaitConfig so the next call re-reads YAML."""
+    global _config
+    _config = None

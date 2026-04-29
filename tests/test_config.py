@@ -1,57 +1,56 @@
 """Tests for configuration loading and path resolution."""
 
-import os
-import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 
-def test_bait_config_defaults():
-    """BaitConfig should provide sensible defaults without a config file."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.chdir(tmpdir)
-        from tomobait.config import BaitConfig
+def test_required_fields_loaded(write_config):
+    """A minimal valid config loads with all defaults applied."""
+    write_config()
+    from bait.config import BaitConfig
 
-        config = BaitConfig()
-        assert config.project.name == "tomo"
-        assert config.server.backend_port == 8001
-        assert config.server.frontend_port == 8000
-        assert config.retriever.k == 3
-
-
-def test_bait_config_path_resolution():
-    """Computed paths should be derived from project settings."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.chdir(tmpdir)
-        from tomobait.config import BaitConfig
-
-        config = BaitConfig()
-        assert config.data_dir == Path(config.project.data_dir)
-        assert config.db_path == config.data_dir / "chroma_db"
-        assert config.docs_output_dir == config.data_dir / "documentation"
-        assert config.chat_history_dir == config.data_dir / "chat_history"
+    config = BaitConfig()
+    assert config.project.name == "test"
+    assert config.server.backend_port == 8001
+    assert config.server.frontend_port == 8000
+    assert config.retriever.k == 3
 
 
-def test_get_agent_llm_settings_defaults():
-    """Agent LLM settings should read from the agent's own config."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.chdir(tmpdir)
-        from tomobait.config import BaitConfig
+def test_get_config_returns_singleton(write_config):
+    """get_config() returns the same instance across calls."""
+    write_config()
+    from bait.config import get_config
 
-        config = BaitConfig()
-        settings = config.get_agent_llm_settings("router")
-        assert settings["model"] == config.agents.router.model
-        assert settings["api_type"] == config.agents.router.api_type
-        assert settings["api_type"] == "anthropic"
-        assert settings["model"] == "claudeopus46"
+    assert get_config() is get_config()
 
 
-def test_get_agent_llm_settings_per_agent():
-    """Each agent can have its own LLM settings in config.yaml."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.chdir(tmpdir)
-        config_data = {
+def test_path_resolution_defaults_to_bait_dot_name(write_config):
+    """data_dir derives from project.name when not explicitly set."""
+    write_config()
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.data_dir == Path(".bait-test")
+    assert config.db_path == config.data_dir / "chroma_db"
+    assert config.docs_output_dir == config.data_dir / "documentation"
+    assert config.chat_history_dir == config.data_dir / "chat_history"
+
+
+def test_path_resolution_explicit_data_dir(write_config):
+    """An explicit project.data_dir wins over the .bait-{name} default."""
+    write_config(extra={"project": {"name": "test", "data_dir": ".bait-explicit"}})
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.data_dir == Path(".bait-explicit")
+
+
+def test_get_agent_llm_settings(write_config):
+    """Per-agent overrides are exposed via get_agent_llm_settings."""
+    write_config(
+        extra={
             "agents": {
                 "router": {
                     "system_prompt": "test",
@@ -60,38 +59,178 @@ def test_get_agent_llm_settings_per_agent():
                     "api_key": "testuser",
                     "argo_base_url": "http://custom",
                 }
-            },
+            }
         }
-        config_path = Path(tmpdir) / "config.yaml"
-        config_path.write_text(yaml.dump(config_data))
+    )
+    from bait.config import BaitConfig
 
-        from tomobait.config import BaitConfig
-
-        config = BaitConfig()
-        settings = config.get_agent_llm_settings("router")
-        assert settings["model"] == "custom-model"
-        assert settings["api_type"] == "openai"
-        assert settings["api_key"] == "testuser"
-        assert settings["argo_base_url"] == "http://custom"
+    config = BaitConfig()
+    settings = config.get_agent_llm_settings("router")
+    assert settings["model"] == "custom-model"
+    assert settings["api_type"] == "openai"
+    assert settings["api_key"] == "testuser"
+    assert settings["argo_base_url"] == "http://custom"
 
 
-def test_bits_skills_dir_with_path():
-    """bits_skills_dir should return the configured BITS path."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.chdir(tmpdir)
-        from tomobait.config import BaitConfig
+def test_bits_skills_dir_with_path(write_config):
+    write_config(extra={"bits": {"path": "/some/path"}})
+    from bait.config import BaitConfig
 
-        config = BaitConfig()
-        config.bits.path = "/some/path"
-        assert config.bits_skills_dir == Path("/some/path")
+    config = BaitConfig()
+    assert config.bits_skills_dir == Path("/some/path")
 
 
-def test_bits_skills_dir_empty():
-    """bits_skills_dir should return cwd when no path is configured."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.chdir(tmpdir)
-        from tomobait.config import BaitConfig
+def test_bits_skills_dir_empty(write_config):
+    write_config(extra={"bits": {"path": ""}})
+    from bait.config import BaitConfig
 
-        config = BaitConfig()
-        config.bits.path = ""
-        assert config.bits_skills_dir == Path(".")
+    config = BaitConfig()
+    assert config.bits_skills_dir == Path(".")
+
+
+# --- BAIT_CONFIG env override ---
+
+
+def test_bait_config_env_points_to_other_dir(tmp_path, monkeypatch):
+    """BAIT_CONFIG resolves to a yaml in any directory, not just cwd."""
+    other_dir = tmp_path / "elsewhere"
+    other_dir.mkdir()
+    cfg = other_dir / "alt.yaml"
+    cfg.write_text(
+        yaml.dump(
+            {
+                "project": {"name": "elsewhere"},
+                "bits": {"path": ""},
+                "agents": {
+                    "router": {"system_prompt": "x"},
+                    "doc_agent": {"system_prompt": "x"},
+                    "bits_agent": {"system_prompt": "x"},
+                },
+            }
+        )
+    )
+    monkeypatch.chdir(tmp_path)  # cwd has no config.yaml
+    monkeypatch.setenv("BAIT_CONFIG", str(cfg))
+
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.project.name == "elsewhere"
+
+
+def test_bait_config_env_missing_file_raises(tmp_path, monkeypatch):
+    """BAIT_CONFIG pointing at a missing file raises with the offending path."""
+    bogus = tmp_path / "nope" / "no.yaml"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BAIT_CONFIG", str(bogus))
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(FileNotFoundError, match=str(bogus)):
+        BaitConfig()
+
+
+def test_no_config_anywhere_raises(tmp_path, monkeypatch):
+    """R4: no BAIT_CONFIG and no ./config.yaml → loud error, not silent defaults."""
+    monkeypatch.delenv("BAIT_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(FileNotFoundError, match="No Bait configuration found"):
+        BaitConfig()
+
+
+# --- extra="forbid" enforcement ---
+
+
+def test_unknown_top_level_key_rejected(write_config):
+    """A typo at the top level surfaces as a ValidationError naming the key."""
+    write_config(extra={"embeddings": {}})  # typo: should be "embedding"
+    from pydantic import ValidationError
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(ValidationError, match="embeddings"):
+        BaitConfig()
+
+
+def test_unknown_nested_key_in_embedding_rejected(write_config):
+    """A typo inside embedding: surfaces as ValidationError naming the key."""
+    write_config(extra={"embedding": {"providr": "anl_argo"}})  # typo
+    from pydantic import ValidationError
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(ValidationError, match="providr"):
+        BaitConfig()
+
+
+def test_unknown_nested_key_in_router_rejected(write_config):
+    """A typo inside agents.router: surfaces as ValidationError naming the key."""
+    write_config(
+        extra={
+            "agents": {
+                "router": {"system_prompt": "x", "api_typ": "openai"}  # typo
+            }
+        }
+    )
+    from pydantic import ValidationError
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(ValidationError, match="api_typ"):
+        BaitConfig()
+
+
+# --- Required fields ---
+
+
+def test_missing_project_name_raises(tmp_path, monkeypatch):
+    """project.name has no default — missing it raises ValidationError."""
+    monkeypatch.delenv("BAIT_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        yaml.dump(
+            {
+                "project": {},
+                "bits": {"path": ""},
+                "agents": {
+                    "router": {"system_prompt": "x"},
+                    "doc_agent": {"system_prompt": "x"},
+                    "bits_agent": {"system_prompt": "x"},
+                },
+            }
+        )
+    )
+    from pydantic import ValidationError
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(ValidationError, match="name"):
+        BaitConfig()
+
+
+def test_missing_bits_path_raises(tmp_path, monkeypatch):
+    """bits.path has no default — missing it raises ValidationError."""
+    monkeypatch.delenv("BAIT_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        yaml.dump(
+            {
+                "project": {"name": "t"},
+                "bits": {},
+                "agents": {
+                    "router": {"system_prompt": "x"},
+                    "doc_agent": {"system_prompt": "x"},
+                    "bits_agent": {"system_prompt": "x"},
+                },
+            }
+        )
+    )
+    from pydantic import ValidationError
+
+    from bait.config import BaitConfig
+
+    with pytest.raises(ValidationError, match="path"):
+        BaitConfig()
