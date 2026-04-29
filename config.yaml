@@ -1,177 +1,67 @@
 project:
   name: tomo
   data_dir: .bait-tomo
-storage:
-  conversations_dir: /Users/ecodrea/tomo-bait/conversations
+
 documentation:
   git_repos:
   - https://github.com/xray-imaging/2bm-docs.git
   local_folders: []
-  docs_output_dir: /Users/ecodrea/tomo-bait/tomo_documentation
-  sphinx_build_html_path: /Users/ecodrea/tomo-bait/tomo_documentation/2bm-docs/docs/_build/html
-  resources:
-    beamlines:
-      2bm:
-        name: 2-BM Bending Magnet Beamline
-        official_page: https://www.aps.anl.gov/Beamlines/Directory/Details?beamline_id=22
-        documentation: https://2bm-docs.readthedocs.io/
-        github_docs: https://github.com/xray-imaging/2bm-docs
-        purpose: X-ray imaging and tomography with emphasis on time-resolved studies
-      32id:
-        name: 32-ID Insertion Device Beamline (TXM)
-        official_page: https://www.aps.anl.gov/Beamlines/Directory/Details?beamline_id=60
-        alternative_names:
-        - ID32
-        - TXM
-        purpose: High-resolution transmission X-ray microscopy and nano-tomography
-    organizations:
-      aps:
-        name: Advanced Photon Source
-        website: https://www.aps.anl.gov/
-        upgrade: https://www.aps.anl.gov/APS-Upgrade
-      anl:
-        name: Argonne National Laboratory
-        website: https://www.anl.gov/
-    software:
-      core_reconstruction:
-        tomopy:
-          description: Open-source Python toolbox for tomographic data processing and
-            image reconstruction
-          pypi: https://pypi.org/project/tomopy/
-          github: https://github.com/tomopy/tomopy
-          docs: https://tomopy.readthedocs.io/
-          maintainer: X-ray Science Division, APS
-        astra_toolbox:
-          description: High-performance GPU primitives for 2D and 3D tomography
-          pypi: https://pypi.org/project/astra-toolbox/
-          github: https://github.com/astra-toolbox/astra-toolbox
-          docs: https://www.astra-toolbox.com/
-        scikit_image:
-          description: Image processing library with tomography utilities
-          pypi: https://pypi.org/project/scikit-image/
-          github: https://github.com/scikit-image/scikit-image
-          docs: https://scikit-image.org/
-      beamline_control:
-        tomoscan:
-          description: Python library for tomography data acquisition at APS
-          github: https://github.com/tomography/tomoscan
-          features:
-          - EPICS integration
-          - Automated workflows
-          - Fly-scan and step-scan modes
-        dmagic:
-          description: Data management and workflow tools for tomography
-          github: https://github.com/xray-imaging/dmagic
-        pyepics:
-          description: Python interface to EPICS
-          pypi: https://pypi.org/project/pyepics/
-          github: https://github.com/pyepics/pyepics
-          website: https://epics-controls.org/
-      data_processing:
-        tomopy_cli:
-          description: Command-line interface for TomoPy reconstruction
-          github: https://github.com/tomography/tomopy-cli
-          pypi: https://pypi.org/project/tomopy-cli/
-        xi_cam:
-          description: Extensible platform for synchrotron data analysis
-          github: https://github.com/Xi-CAM/Xi-cam
-          docs: https://xi-cam.readthedocs.io/
-        dxfile:
-          description: Data Exchange file format utilities
-          github: https://github.com/data-exchange/dxfile
-      visualization:
-        tomviz:
-          description: Cross-platform application for 3D visualization of tomography
-          website: https://tomviz.org/
-          github: https://github.com/OpenChemistry/tomviz
-        napari:
-          description: Multi-dimensional image viewer
-          website: https://napari.org/
-          pypi: https://pypi.org/project/napari/
-        paraview:
-          description: Advanced 3D scientific visualization
-          website: https://www.paraview.org/
-      file_formats:
-        h5py:
-          description: HDF5 for Python
-          pypi: https://pypi.org/project/h5py/
-        nexusformat:
-          description: NeXus HDF5 standard for scientific data
-          pypi: https://pypi.org/project/nexusformat/
-          github: https://github.com/nexpy/nexusformat
-        tifffile:
-          description: Advanced TIFF reading/writing for scientific imaging
-          pypi: https://pypi.org/project/tifffile/
-    python_ecosystem:
-      scientific_stack:
-      - name: NumPy
-        website: https://numpy.org/
-        purpose: Array operations
-      - name: SciPy
-        website: https://scipy.org/
-        purpose: Scientific algorithms
-      - name: Matplotlib
-        website: https://matplotlib.org/
-        purpose: Plotting and visualization
-      - name: Pandas
-        website: https://pandas.pydata.org/
-        purpose: Data analysis
-      parallel_processing:
-      - name: Dask
-        website: https://www.dask.org/
-        pypi: https://pypi.org/project/dask/
-        purpose: Parallel computing for large datasets
-      - name: mpi4py
-        pypi: https://pypi.org/project/mpi4py/
-        purpose: MPI bindings for distributed computing
-      machine_learning:
-      - name: scikit-learn
-        website: https://scikit-learn.org/
-        purpose: Classical ML algorithms
-      - name: TensorFlow
-        website: https://www.tensorflow.org/
-        purpose: Deep learning
-      - name: PyTorch
-        website: https://pytorch.org/
-        purpose: Deep learning
-    community:
-      documentation:
-      - name: TomoPy Tutorials
-        url: https://tomopy.readthedocs.io/en/latest/tutorials.html
-      - name: APS User Information
-        url: https://www.aps.anl.gov/Users-Information
-      publications:
-      - name: Journal of Synchrotron Radiation
-        url: https://journals.iucr.org/s/
-      - name: arXiv (physics.ins-det)
-        url: https://arxiv.org/archive/physics.ins-det
-    github_organizations:
-    - name: xray-imaging
-      url: https://github.com/xray-imaging
-      description: APS beamline software and documentation
-    - name: tomography
-      url: https://github.com/tomography
-      description: TomoPy and related reconstruction tools
-    - name: areaDetector
-      url: https://github.com/areaDetector
-      description: EPICS drivers for 2D detectors
+
 retriever:
-  db_path: null
-  embedding_model: sentence-transformers/all-MiniLM-L6-v2
   k: 3
   search_type: similarity
   score_threshold: null
-llm:
+
+embedding:
+  provider: anl_argo
   api_key: ecodrea
-  model: gpt51
-  api_type: openai
-  base_url: https://apps-dev.inside.anl.gov/argoapi/v1/
-  system_message: 'You are an expert on this project''s documentation. When answering
-    questions: 1. Answer based *only* on the context from your ''query_documentation''
-    tool 2. Provide concise but complete responses (2-3 paragraphs) 3. For "how to"
-    questions, provide step-by-step numbered instructions 4. Include relevant source
-    links from the context (documentation URLs, GitHub, PyPI, etc.) 5. If the context
-    is insufficient, say so. Do not make up answers.'
+  model: 'text-embedding-3-large'
+  device: cpu
+  argo_base_url: https://apps-dev.inside.anl.gov/argoapi/v1
+
+agents:
+  router:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: ecodrea
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
+    system_prompt: |
+      You are a question classifier for a beamline instrument system.
+
+      Classify the user's question into exactly one category:
+      - "documentation": Questions about beamline documentation, experimental procedures,
+        how-to guides, configuration, or general usage.
+      - "device": Questions about ophyd devices, EPICS PVs, signals, motors, detectors,
+        shutters, scan parameters, Bluesky plans, or hardware interaction.
+
+      Respond with ONLY the category name, nothing else.
+  doc_agent:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: ecodrea
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
+    system_prompt: |
+      You are an expert on this project's documentation. When answering questions:
+      1. Answer based *only* on the context from your 'query_documentation' tool
+      2. Provide concise but complete responses (2-3 paragraphs)
+      3. For "how to" questions, provide step-by-step numbered instructions
+      4. Include relevant source links from the context (documentation URLs, GitHub, PyPI, etc.)
+      5. If the context is insufficient, say so. Do not make up answers.
+  bits_agent:
+    model: claudeopus46
+    api_type: anthropic
+    api_key: ecodrea
+    argo_base_url: https://apps.inside.anl.gov/argoapi/v1
+    system_prompt: |
+      You are an expert on BITS (Beamline Instrument and Tool Suite) devices,
+      ophyd signals, EPICS PVs, scan parameters, and Bluesky plans for this beamline.
+
+      Answer questions about devices, their signals, PV names, scan configuration,
+      and how to interact with hardware using ophyd and Bluesky.
+
+      Base your answers on the device reference below. If the reference does not
+      contain enough information, say so. Do not invent PV names or device attributes.
+
 text_processing:
   chunk_size: 1000
   chunk_overlap: 200
@@ -180,3 +70,7 @@ server:
   backend_port: 8001
   frontend_host: 0.0.0.0
   frontend_port: 8000
+
+bits:
+  path: /Users/ecodrea/tomo-bits
+  instrument_name: tomo_2bm

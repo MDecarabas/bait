@@ -4,20 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TomoBait is a RAG (Retrieval-Augmented Generation) system for tomography beamline documentation. It ingests Sphinx documentation from the 2-BM beamline, stores it in a vector database (ChromaDB), and provides a conversational interface for querying the documentation using AI agents.
+TomoBait is a RAG (Retrieval-Augmented Generation) system for tomography beamline documentation. It ingests Sphinx documentation from the 2-BM beamline, stores it in a vector database (ChromaDB), and provides a conversational interface for querying the documentation using LangGraph-orchestrated AI agents.
 
 ## Development Environment
 
-This project uses **uv** for fast dependency management and task running. All commands should be run through uv.
+This project uses **uv** for dependency management and task running.
 
 ### Initial Setup
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies
-uv sync
+uv venv
+uv pip install -e .
 ```
 
 ## Common Commands
@@ -30,189 +27,180 @@ uv run start-backend
 
 # Start the Gradio frontend (port 8000)
 uv run start-frontend
-
-# Run CLI interface
-uv run run-cli "Your question here"
 ```
 
 ### Code Quality
 
 ```bash
 # Check code style
-uv run lint
+uv run ruff check .
 
 # Format code
-uv run format
+uv run ruff format .
 ```
 
 ### Data Ingestion
 
 ```bash
 # Ingest documentation (clones repo, builds Sphinx docs, creates vector DB)
-uv run ingest
+uv run python -m tomobait.data_ingestion
+```
+
+### Testing
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=tomobait
 ```
 
 ## Architecture
 
+### Multi-Agent System (LangGraph)
+
+TomoBait uses a LangGraph StateGraph with three nodes:
+
+1. **Router** — classifies incoming questions as "documentation" or "device"
+2. **Doc Agent** — retrieves documentation chunks from ChromaDB via tool calling, then synthesizes an answer
+3. **BITS Agent** — answers device-related questions using a preloaded skills reference file
+
+The flow: `router → (conditional edge) → doc_agent | bits_agent → END`
+
 ### Project-Based Data Isolation
 
-TomoBait uses a project-based directory structure to isolate all data:
-- Each project is defined in `config.yaml` with a `project.name` (e.g., "tomo")
-- All data is stored in `.bait-{name}/` directory (e.g., `.bait-tomo/`)
-- Directory structure:
-  ```
-  .bait-tomo/
-  ├── chroma_db/          # Vector database
-  ├── conversations/      # Saved chat history
-  └── documentation/      # Cloned repos and built docs
-  ```
+All data lives under `.bait-{project.name}/` (e.g., `.bait-tomo/`):
 
-### Three-Layer System
+```
+.bait-tomo/
+├── chroma_db/          # Vector database
+├── documentation/      # Cloned repos and built docs
+└── chat_history/       # Saved conversation JSON files
+```
 
-1. **Data Ingestion Layer** (`data_ingestion.py`)
+### Modules
+
+1. **Configuration** (`config.py`)
+   - Centralized configuration via pydantic-settings, loaded from `config.yaml`
+   - `BaitConfig` is the main settings class with computed path properties (`data_dir`, `docs_output_dir`, `db_path`, `chat_history_dir`, `bits_skills_dir`)
+   - Per-agent LLM settings with global defaults and per-agent overrides via `get_agent_llm_settings(agent_name)`
+
+2. **Utilities** (`utils.py`)
+   - `get_embeddings(config)` — shared factory for embedding models (HuggingFace or ANL Argo)
+   - `build_llm_client(llm_settings)` — cached factory for OpenAI/Anthropic clients
+   - `llm_chat()` — SDK-agnostic wrapper that normalizes OpenAI and Anthropic call/response formats
+   - `build_tool_result_messages()` — formats tool results for either SDK
+
+3. **Data Ingestion** (`data_ingestion.py`)
    - Clones/updates documentation repositories from GitHub
    - Builds Sphinx documentation to HTML
    - Uses `ReadTheDocsLoader` to load HTML documentation
    - Chunks documents using `RecursiveCharacterTextSplitter` (configurable size/overlap)
-   - Embeds using HuggingFace `sentence-transformers/all-MiniLM-L6-v2` (local, no API)
    - Stores in ChromaDB at `.bait-{project.name}/chroma_db`
-   - Embeds resource definitions from `config.yaml`
 
-2. **Backend/Agent Layer** (`app.py`)
-   - FastAPI server exposing `/chat` endpoint
-   - Uses Autogen (AG2) multi-agent framework with Gemini 2.5 Flash
-   - **Two-agent system**:
-     - `doc_expert` (AssistantAgent): LLM-powered agent that answers questions
-     - `tool_worker` (UserProxyAgent): Executes the `query_documentation` tool
-   - Agent workflow: User question → doc_expert calls tool → tool_worker retrieves from ChromaDB → doc_expert synthesizes answer
-   - Requires `GEMINI_API_KEY` environment variable
+4. **Retriever** (`retriever.py`)
+   - Shared utility for accessing ChromaDB
+   - Returns top-k most relevant document chunks (configurable, default k=3)
+   - Can be tested standalone: `python -m tomobait.retriever "test query"`
 
-3. **Frontend Layer** (`frontend.py`)
-   - Gradio chatbot interface with four tabs: Chat, History, Configuration, Setup
-   - Makes HTTP requests to FastAPI backend
-   - Handles image rendering from documentation (parses markdown image paths)
-   - Serves static files from project documentation directory
-   - Provides hot-reload configuration editing
-   - AI-powered configuration generation
+5. **Agents** (`agents.py`)
+   - LangGraph StateGraph with three nodes: `router`, `doc_agent`, `bits_agent`
+   - Router classifies questions; conditional edge dispatches to the right agent
+   - Doc agent uses OpenAI-compatible tool calling to invoke `query_documentation`
+   - BITS agent uses preloaded device skills reference for device questions
+   - `route_question(user_question)` — main entry point called by the backend
 
-### Retriever Module (`retriever.py`)
+6. **Backend** (`app.py`)
+   - FastAPI server with endpoints:
+     - `POST /chat` — send a question, get an agent response
+     - `GET /config` — read current configuration
+     - `POST /config` — update configuration (placeholder)
+     - `POST /chat/save` — save or update a conversation
+     - `GET /chat/history` — list saved chats (metadata only)
+     - `GET /chat/history/{chat_id}` — load a full conversation
+     - `DELETE /chat/history/{chat_id}` — delete a conversation
+   - Path traversal protection on chat history endpoints
 
-- Shared utility for accessing ChromaDB
-- Returns top 3 most relevant document chunks (k=3)
-- Can be tested standalone: `python src/tomobait/retriever.py "test query"`
-
-### CLI Interface (`cli.py`)
-
-- Simple argparse wrapper around `run_agent_chat()`
-- Provides command-line access to the agent system
+7. **Frontend** (`frontend.py`)
+   - Gradio chatbot interface with sidebar chat history management
+   - Makes HTTP requests to the FastAPI backend
+   - Save, load, and delete conversation sessions
+   - Serves documentation images through Gradio's `allowed_paths` mechanism
 
 ## Key Configuration
 
 All configuration is centralized in `config.yaml`:
 
-- **Project Settings**: Define `project.name` and `project.data_dir` (e.g., ".bait-tomo")
-- **Storage**: Conversations directory (defaults to `{data_dir}/conversations`)
-- **Documentation**: Git repos, local folders, and resource definitions all in one section
-- **Retriever**: ChromaDB path (defaults to `{data_dir}/chroma_db`), embedding model, search parameters
-- **Embedding Model**: `sentence-transformers/all-MiniLM-L6-v2` (must match between ingestion and retrieval)
-- **LLM Providers**: Supports Gemini (default), OpenAI, Anthropic, Azure, and ANL Argo via Autogen
-- **Hot-Reload**: Configuration changes are detected and applied automatically
-- **Ports**: Backend on 8001, Frontend on 8000
+- **Project Settings**: `project.name` and `project.data_dir`
+- **Documentation**: Git repos, local folders, and reference resources
+- **Retriever**: k, search_type, score_threshold
+- **Embedding**: Provider (`huggingface` or `anl_argo`), model name, device
+- **Agents**: Per-agent config (router, doc_agent, bits_agent) with system prompts and LLM settings (model, api_type, api_key, argo_base_url)
+- **Text Processing**: chunk_size, chunk_overlap
+- **Server**: Ports (backend 8001, frontend 8000)
+- **BITS**: bits_skills_dir for device reference files
 
-All paths can be explicitly set in config.yaml or left null to use computed defaults based on `project.data_dir`.
+## API Keys
 
-## Environment Variables
-
-The system supports multiple LLM providers. Set up the appropriate API key based on your configuration:
-
-### Gemini (Default)
-```bash
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-Get your key from: https://aistudio.google.com/app/apikey
-
-### OpenAI
-```bash
-OPENAI_API_KEY=your_openai_api_key_here
-```
-Get your key from: https://platform.openai.com/api-keys
-
-Supported models: `gpt-4`, `gpt-4-turbo`, `gpt-4o`, `gpt-3.5-turbo`
-
-### Anthropic (Claude)
-```bash
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-```
-Get your key from: https://console.anthropic.com/settings/keys
-
-Supported models: `claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku`
-
-### Azure OpenAI
-```bash
-AZURE_OPENAI_API_KEY=your_azure_openai_api_key_here
-```
-Get it from your Azure portal.
-
-### ANL Argo (OpenAI-Compatible Endpoint)
-ANL Argo provides an OpenAI-compatible API endpoint. Configure in `config.yaml`:
-```yaml
-llm:
-  api_key: your_anl_username
-  model: gpt4o
-  api_type: openai
-  base_url: https://apps-dev.inside.anl.gov/argoapi/v1/
-```
-
-**Available Argo Models:**
-- **OpenAI**: `gpt4o`, `gpt4olatest`, `gpt4turbo`, `gpt41`, `gpt5`, `gpt5mini`
-- **Google**: `gemini25pro`, `gemini25flash`
-- **Anthropic**: `claudesonnet4`, `claudesonnet45`, `claudeopus4`, `claudeopus45`, `claudehaiku45`
-
-All models support tool/function calling (except o1-series reasoning models).
-
-**Note**: For standard providers, copy `.env.example` to `.env` and fill in your API key. The provider and model can be configured via the Configuration tab in the web interface or by editing `config.yaml`.
+All API keys are configured per-agent in `config.yaml` under `agents.{agent_name}.api_key`. For ANL Argo, the API key is your ANL username. Each agent can use a different provider/model independently.
 
 ## Code Style
 
-- Ruff for linting and formatting
+- Ruff for linting and formatting (config in `ruff.toml`)
 - Line length: 88 characters
 - Linting rules: Pyflakes (F), pycodestyle (E), isort (I)
 - Double quotes, space indentation
 
 ## Important Implementation Details
 
-### Agent Termination Logic
+### Agent Routing and Tool Calling
 
-The `tool_worker` agent terminates when it receives a message WITHOUT tool calls. This means the conversation flow is:
-1. User question sent to doc_expert
-2. doc_expert generates tool call
-3. tool_worker executes tool, returns results
-4. doc_expert generates final answer (no tool calls)
-5. Conversation terminates
+The LangGraph router classifies questions as "documentation" or "device". The doc agent uses tool calling (`query_documentation`) via the SDK-agnostic `llm_chat()` wrapper in `utils.py`, which handles both OpenAI and Anthropic protocols. The tool-call loop continues until the LLM returns a final text answer. The BITS agent answers from a preloaded device skills markdown file without tool calls.
+
+### Chat History Persistence
+
+Conversations are saved as JSON files in `.bait-{project.name}/chat_history/`. Each file stores messages, title, timestamps, and a unique ID. The backend guards against path traversal attacks on chat IDs.
 
 ### Documentation Sources
 
 The system can ingest from multiple sources:
 - **Git Repositories**: Cloned to `.bait-{name}/documentation/`, Sphinx docs built automatically
 - **Local Folders**: Pre-built documentation can be loaded directly
-- **Resource Definitions**: Beamlines, software packages, and organizations defined in `config.yaml` are embedded as searchable documents
-
-Default configuration includes the 2-BM tomography beamline documentation. The ingestion process expects a Sphinx documentation structure with a `docs/` directory.
 
 ### Image Handling in Frontend
 
-The Gradio frontend has custom logic to:
-- Parse image paths from agent responses
-- Resolve relative paths to absolute paths in the project documentation directory
-- Serve images through Gradio's `allowed_paths` mechanism
+The Gradio frontend resolves documentation image paths to absolute filesystem paths and serves them through Gradio's `allowed_paths` mechanism.
 
 ### Path Resolution
 
-All paths in the codebase are computed from `config.yaml`:
-- `config.get_data_dir()` → `.bait-{project.name}/`
-- `config.get_db_path()` → `.bait-{project.name}/chroma_db`
-- `config.get_conversations_dir()` → `.bait-{project.name}/conversations`
-- `config.get_docs_output_dir()` → `.bait-{project.name}/documentation`
-- `config.get_sphinx_build_html_path()` → Auto-detected or configured
+All paths are computed properties on `BaitConfig`:
+- `config.data_dir` → `.bait-{project.name}/`
+- `config.db_path` → `.bait-{project.name}/chroma_db`
+- `config.docs_output_dir` → `.bait-{project.name}/documentation`
+- `config.chat_history_dir` → `.bait-{project.name}/chat_history`
+- `config.bits_skills_dir` → `.bait-{project.name}/bits_skills`
 
-This ensures no hardcoded paths exist outside of config.yaml.
+## gstack
+
+Use the `/browse` skill from gstack for all web browsing. Never use `mcp__claude-in-chrome__*` tools.
+
+Available skills: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/review`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/browse`, `/connect-chrome`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/setup-deploy`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/cso`, `/autoplan`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`, `/learn`.
+
+## Skill routing
+
+When the user's request matches an available skill, ALWAYS invoke it using the Skill
+tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
+The skill has specialized workflows that produce better results than ad-hoc answers.
+
+Key routing rules:
+- Product ideas, "is this worth building", brainstorming → invoke office-hours
+- Bugs, errors, "why is this broken", 500 errors → invoke investigate
+- Ship, deploy, push, create PR → invoke ship
+- QA, test the site, find bugs → invoke qa
+- Code review, check my diff → invoke review
+- Update docs after shipping → invoke document-release
+- Weekly retro → invoke retro
+- Design system, brand → invoke design-consultation
+- Visual audit, design polish → invoke design-review
+- Architecture review → invoke plan-eng-review
