@@ -14,8 +14,9 @@ def _resolve_config_path() -> Path:
     Order:
       1. ``BAIT_CONFIG`` env var (must point to an existing file).
       2. ``./config.yaml`` in the current working directory.
+      3. ``./configs/bait_config.yaml`` (BITS-repo-root convention).
 
-    Raises ``FileNotFoundError`` if neither is found, so a missing config is
+    Raises ``FileNotFoundError`` if none are found, so a missing config is
     a loud startup failure instead of silent fallback to defaults.
     """
     env_path = os.environ.get("BAIT_CONFIG")
@@ -24,14 +25,18 @@ def _resolve_config_path() -> Path:
         if not p.is_file():
             raise FileNotFoundError(f"BAIT_CONFIG points to a missing file: {p}")
         return p
-    p = Path("config.yaml")
-    if not p.is_file():
-        raise FileNotFoundError(
-            "No Bait configuration found. Either set "
-            "BAIT_CONFIG=/abs/path/config.yaml or place config.yaml in the "
-            "current working directory."
-        )
-    return p
+    cwd_config = Path("config.yaml")
+    if cwd_config.is_file():
+        return cwd_config
+    bits_config = Path("configs") / "bait_config.yaml"
+    if bits_config.is_file():
+        return bits_config
+    raise FileNotFoundError(
+        "No Bait configuration found. Either set "
+        "BAIT_CONFIG=/abs/path/config.yaml, place config.yaml in the "
+        "current working directory, or create configs/bait_config.yaml "
+        "(BITS-repo-root convention)."
+    )
 
 
 # --- Pydantic Models for Configuration Sections ---
@@ -190,6 +195,60 @@ class BITSConfig(BaseModel):
     instrument_name: str = Field(
         default="", description="Python package name (e.g., 'tomo_2bm')"
     )
+    skills_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override path to the device-skills directory. "
+            "Defaults to {path}/.claude/skills/ophyd-device-control."
+        ),
+    )
+    queueserver_script: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override path to the queue-server start script. "
+            "Defaults to {path}/scripts/{instrument_name}_qs_host.sh."
+        ),
+    )
+    oas_startup_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Override path to the ophyd-websocket startup .py file. "
+            "Defaults to bait's bundled default_oas_startup.py (sim devices)."
+        ),
+    )
+
+
+class OphydWebsocketConfig(BaseModel):
+    """ophyd-websocket OAS server settings (server lifecycle, not BITS paths)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Whether to enable OAS at all")
+    auto_start: bool = Field(
+        default=True,
+        description="If true, spawn the OAS server on startup when not reachable",
+    )
+    repo_path: str = Field(
+        default="/Users/ecodrea/ophyd-websocket",
+        description="Filesystem path to the ophyd-websocket repository checkout",
+    )
+    host: str = Field(default="localhost", description="OAS server host")
+    port: int = Field(
+        default=8002,
+        description="OAS server port (NOT 8001 — that conflicts with bait backend)",
+    )
+    require_qserver: bool = Field(
+        default=True,
+        description="OAS strict mode: block writes if queue server not reachable",
+    )
+    python_executable: Optional[str] = Field(
+        default=None,
+        description=(
+            "Python interpreter to use when spawning the OAS subprocess. "
+            "Defaults to sys.executable (bait's venv). Override to point at "
+            "the conda env that has ophyd installed."
+        ),
+    )
 
 
 class BaitConfig(BaseSettings):
@@ -202,6 +261,7 @@ class BaitConfig(BaseSettings):
 
     project: ProjectConfig
     bits: BITSConfig
+    ophyd_websocket: OphydWebsocketConfig = Field(default_factory=OphydWebsocketConfig)
     documentation: DocumentationSourceConfig = Field(
         default_factory=DocumentationSourceConfig
     )
@@ -249,8 +309,32 @@ class BaitConfig(BaseSettings):
     @computed_field
     @property
     def bits_skills_dir(self) -> Path:
-        """BITS root folder where device_skills.md lives."""
-        return Path(self.bits.path) if self.bits.path else Path(".")
+        """Directory holding device-skill markdown files loaded into bits_agent."""
+        if self.bits.skills_dir:
+            return Path(self.bits.skills_dir).expanduser()
+        return Path(self.bits.path) / ".claude" / "skills" / "ophyd-device-control"
+
+    @computed_field
+    @property
+    def queueserver_script(self) -> Path:
+        """Path to the queue-server start script."""
+        if self.bits.queueserver_script:
+            return Path(self.bits.queueserver_script).expanduser()
+        return (
+            Path(self.bits.path) / "scripts" / f"{self.bits.instrument_name}_qs_host.sh"
+        )
+
+    @computed_field
+    @property
+    def oas_startup_file(self) -> Path:
+        """Path to the .py file the OAS server loads to populate its registry."""
+        if self.bits.oas_startup_file:
+            return Path(self.bits.oas_startup_file).expanduser()
+        # Don't import the module — it imports ophyd, which is only available
+        # in the OAS subprocess, not in tomo-bait itself.
+        import bait.devices as _devices_pkg
+
+        return Path(_devices_pkg.__file__).parent / "default_oas_startup.py"
 
     def get_agent_llm_settings(self, agent_name: str) -> dict:
         """Return LLM settings for a given agent."""

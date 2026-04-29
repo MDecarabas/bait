@@ -183,6 +183,60 @@ def test_no_config_anywhere_raises(tmp_path, monkeypatch):
         BaitConfig()
 
 
+def test_bits_root_configs_dir_fallback(tmp_path, monkeypatch):
+    """No cwd config.yaml, but configs/bait_config.yaml present → resolved."""
+    monkeypatch.delenv("BAIT_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "bait_config.yaml").write_text(
+        yaml.dump(
+            {
+                "project": {"name": "from-bits-configs"},
+                "bits": {"path": ""},
+                "agents": {
+                    "router": {"system_prompt": "x"},
+                    "doc_agent": {"system_prompt": "x"},
+                    "bits_agent": {"system_prompt": "x"},
+                },
+            }
+        )
+    )
+
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.project.name == "from-bits-configs"
+
+
+def test_cwd_config_yaml_preferred_over_bits_configs(tmp_path, monkeypatch):
+    """If both ./config.yaml and ./configs/bait_config.yaml exist, ./config.yaml wins."""
+    monkeypatch.delenv("BAIT_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    def _minimal(name):
+        return yaml.dump(
+            {
+                "project": {"name": name},
+                "bits": {"path": ""},
+                "agents": {
+                    "router": {"system_prompt": "x"},
+                    "doc_agent": {"system_prompt": "x"},
+                    "bits_agent": {"system_prompt": "x"},
+                },
+            }
+        )
+
+    (tmp_path / "config.yaml").write_text(_minimal("from-cwd"))
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "bait_config.yaml").write_text(_minimal("from-bits-configs"))
+
+    from bait.config import BaitConfig
+
+    config = BaitConfig()
+    assert config.project.name == "from-cwd"
+
+
 # --- extra="forbid" enforcement ---
 
 

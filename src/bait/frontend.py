@@ -47,24 +47,97 @@ def _resolve_allowed_paths(config: BaitConfig) -> List[str]:
     return paths
 
 
-def chat_func(message, history):
-    """Send a message to the backend and append the response to history."""
+def _format_pending_writes(writes: list[dict]) -> str:
+    """Render the proposed writes as a markdown table for the confirm group."""
+    rows = ["| device | component | value |", "|---|---|---|"]
+    for w in writes:
+        name = w.get("name", "")
+        component = w.get("component") or "—"
+        value = w.get("value", "")
+        rows.append(f"| `{name}` | `{component}` | `{value}` |")
+    return "\n".join(rows)
+
+
+def chat_func(message, history, pending_state):
+    """Send a message to the backend, render response, surface any HITL writes."""
     config = get_config()
     try:
         response = requests.post(_chat_url(config), json={"query": message})
         response.raise_for_status()
-        agent_response = response.json().get("response", "No response from agent.")
-
-        history.append({"role": "user", "content": message})
-        history.append({"role": "assistant", "content": agent_response})
-        return history
-
+        data = response.json()
     except requests.exceptions.RequestException as e:
         history.append({"role": "user", "content": message})
         history.append(
             {"role": "assistant", "content": f"Error connecting to backend: {e}"}
         )
-        return history
+        return history, pending_state, gr.update(visible=False), "", ""
+
+    agent_response = data.get("response", "No response from agent.")
+    pending_writes = data.get("pending_writes")
+    pending_id = data.get("pending_id")
+    qs_alert = data.get("qs_alert")
+
+    history.append({"role": "user", "content": message})
+    history.append({"role": "assistant", "content": agent_response})
+
+    if pending_writes and pending_id:
+        return (
+            history,
+            {"pending_id": pending_id, "writes": pending_writes},
+            gr.update(visible=True),
+            _format_pending_writes(pending_writes),
+            f"⚠️ {qs_alert}" if qs_alert else "",
+        )
+    return history, None, gr.update(visible=False), "", ""
+
+
+def confirm_writes(history, pending_state):
+    """Send the staged writes to /chat/confirm with approved=True."""
+    return _resolve_pending(history, pending_state, approved=True)
+
+
+def cancel_writes(history, pending_state):
+    """Send the staged writes to /chat/confirm with approved=False."""
+    return _resolve_pending(history, pending_state, approved=False)
+
+
+def _resolve_pending(history, pending_state, approved: bool):
+    if not pending_state:
+        return history, None, gr.update(visible=False), "", ""
+    config = get_config()
+    pending_id = pending_state["pending_id"]
+    try:
+        resp = requests.post(
+            f"{_backend_url(config)}/chat/confirm",
+            json={"pending_id": pending_id, "approved": approved},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.RequestException as e:
+        history.append(
+            {"role": "assistant", "content": f"Error confirming writes: {e}"}
+        )
+        return history, None, gr.update(visible=False), "", ""
+
+    if data.get("denied"):
+        history.append(
+            {"role": "assistant", "content": "Cancelled — no writes performed."}
+        )
+    else:
+        lines = []
+        for entry in data.get("results", []):
+            r = entry["result"]
+            w = entry["write"]
+            label = f"{w['name']}{('.' + w['component']) if w.get('component') else ''}"
+            if r.get("ok"):
+                lines.append(f"✅ Set `{label}` to `{w['value']}`.")
+            else:
+                err = r.get("error", "unknown error")
+                lines.append(f"❌ Failed to set `{label}` to `{w['value']}`: {err}")
+                if r.get("qs_alert"):
+                    lines.append(f"⚠️ {r['qs_alert']}")
+        history.append({"role": "assistant", "content": "\n".join(lines)})
+    return history, None, gr.update(visible=False), "", ""
 
 
 def new_conversation():
@@ -189,6 +262,7 @@ def _build_demo() -> gr.Blocks:
 
         current_chat_id = gr.State(None)
         history_ids = gr.State([])
+        pending_state = gr.State(None)
 
         with gr.Sidebar(label="Chat History", open=False, position="left"):
             refresh_btn = gr.Button("🔄 Refresh", size="sm")
@@ -205,6 +279,14 @@ def _build_demo() -> gr.Blocks:
 
                 chatbot = gr.Chatbot([], elem_id="chatbot", height=500)
 
+                with gr.Group(visible=False) as pending_group:
+                    gr.Markdown("### Confirm proposed device writes")
+                    qs_banner = gr.Markdown("")
+                    pending_table = gr.Markdown("")
+                    with gr.Row():
+                        confirm_btn = gr.Button("✅ Confirm", variant="primary")
+                        cancel_btn = gr.Button("❌ Cancel", variant="stop")
+
                 with gr.Row():
                     txt = gr.Textbox(
                         scale=4,
@@ -213,8 +295,20 @@ def _build_demo() -> gr.Blocks:
                         container=False,
                     )
 
-                txt.submit(chat_func, [txt, chatbot], [chatbot]).then(
-                    lambda: "", None, txt
+                txt.submit(
+                    chat_func,
+                    [txt, chatbot, pending_state],
+                    [chatbot, pending_state, pending_group, pending_table, qs_banner],
+                ).then(lambda: "", None, txt)
+                confirm_btn.click(
+                    confirm_writes,
+                    [chatbot, pending_state],
+                    [chatbot, pending_state, pending_group, pending_table, qs_banner],
+                )
+                cancel_btn.click(
+                    cancel_writes,
+                    [chatbot, pending_state],
+                    [chatbot, pending_state, pending_group, pending_table, qs_banner],
                 )
                 new_chat_btn.click(new_conversation, [], [chatbot, current_chat_id])
                 save_btn.click(save_chat, [chatbot, current_chat_id], [current_chat_id])
