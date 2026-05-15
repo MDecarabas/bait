@@ -1,40 +1,3 @@
-"""WebSocket router for live ophyd Device monitoring and control.
-
-Endpoint: ``ws://<host>:<port>/api/v1/device-socket``
-
-Differs from ``pv_socket`` in three important ways:
-
-1. **Resolves names through the device registry.** Subscribes by device name
-   (e.g. ``tomoscan``), not raw PV. The device must already be loaded into the
-   registry via the startup file or ``POST /api/v1/load-devices``.
-2. **Recursively subscribes to every component.** For an ophyd ``Device``, this
-   router walks ``component_names`` and attaches callbacks to each leaf signal.
-   ``EpicsMotor`` and ``PseudoPositioner`` get a ``readback`` subscription;
-   ``EpicsSignal``/``EpicsSignalRO`` get ``meta`` + ``value`` subscriptions.
-3. **Aggregates connection state.** Disconnect of any single component flips
-   the device-level ``connected`` flag; reconnects are reported back when ophyd
-   reports them. (TODO in the upstream: verify *all* components are connected
-   before reporting True.)
-
-Client → server messages (same action protocol as ``pv_socket``):
-
-  - ``subscribe`` / ``subscribeSafely`` / ``subscribeReadOnly`` —
-    ``{action: "subscribe", device: "tomoscan"}``.
-  - ``unsubscribe`` — ``{action: "unsubscribe", device: "tomoscan"}``.
-  - ``refresh`` — re-issue ``.get()`` on every subscribed device.
-  - ``set`` — ``{action: "set", device: "tomoscan", value: 5.0, timeout: 1}``.
-    Value coercion mirrors ``pv_socket``. Limits checked via
-    ``device.low_limit``/``device.high_limit`` *unless* the device is a
-    ``PseudoPositioner`` (which doesn't expose those attributes directly).
-
-Server → client messages: per-component value updates with ``{device, value,
-timestamp, connected, read_access, write_access, signal}`` where ``signal`` is
-the leaf ophyd object's ``.name`` so the client can tell which component fired.
-
-Intended use: a beamline dashboard that wants live device state without having
-to know the PV map. Pairs naturally with the device registry populated by the
-startup file.
-"""
 import asyncio
 import json
 import numpy as np
@@ -42,7 +5,7 @@ import logging
 from ophyd import EpicsSignalRO, EpicsSignal, Device, EpicsMotor
 from ophyd.pseudopos import PseudoPositioner
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ..device_registry import device_registry
+from device_registry import device_registry
 import time
 
 # Set up logger
@@ -53,7 +16,7 @@ router = APIRouter()
 @router.websocket("/device-socket")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-
+       
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -202,7 +165,7 @@ async def websocket_endpoint(websocket: WebSocket):
             subscriptions[device_name].get()
         await websocket.send_json({"message": "Refreshed all devices"})
         return
-
+    
     async def handleSet(data):
         device_name = data.get("device")
         if not device_name:
@@ -211,13 +174,13 @@ async def websocket_endpoint(websocket: WebSocket):
         if device_name not in subscriptions:
             await websocket.send_json({"error": f"Device {device_name} is not subscribed. Subscribe to device before setting value."})
             return
-
+        
         device = subscriptions.get(device_name)
         #if device.write_access == False:
         #temporary workaround until we get a better way to know if a device should be writable, writable devices still showing null write_access
         #     await websocket.send_json({"error": f"Write access is not enabled for device {device_name}. Cannot set value."})
         #     return
-
+        
         value = data.get("value")
         try:
             # Try to convert to number if it looks like one
@@ -229,22 +192,22 @@ async def websocket_endpoint(websocket: WebSocket):
         except ValueError:
             await websocket.send_json({"error": f"Value must be a number. Could not set value of {device_name} to {value}"})
             return
-
+        
         timeout = data.get("timeout", 1) #default 1 second timeout
         if not isinstance(timeout, (int, float)):
             await websocket.send_json({"error": f"Timeout must be a number. Could not set value of {device_name} to {value}"})
             return
-
+        
         if not isinstance(device, PseudoPositioner) and isinstance(value, (int, float)):
             low_limit = device.low_limit
             high_limit = device.high_limit
-
+        
             if (low_limit is not None and value < low_limit) or (high_limit is not None and value > high_limit):
                 #area detector limits have a low limit === high limit by default.
                 if (low_limit != high_limit):
                     await websocket.send_json({"error": f"Value {value} is outside of limits for device {device_name}. Low limit: {low_limit}, High limit: {high_limit}"})
                     return
-
+        
         try:
             if isinstance(value, str):
                 device.put(value, wait=True, timeout=timeout, use_complete=True)
@@ -253,7 +216,7 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as error:
             await websocket.send_json({"error": f"Could not set value of {device_name} to {value}: {str(error)}"})
             return
-
+        
         await websocket.send_json({"message": f"Successfully set {device_name} to {value}"})
 
 
@@ -277,7 +240,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if action == "subscribe":
                     await handleSubscribe(data)
                     continue
-
+                
                 if action == "subscribeSafely":
                     await handleSubscribe(data, requireConnection=True)
                     continue

@@ -128,6 +128,57 @@ All data lives under `.bait-{project.name}/` (e.g., `.bait-tomo/`):
    - Save, load, and delete conversation sessions
    - Serves documentation images through Gradio's `allowed_paths` mechanism
 
+8. **Device I/O** (`device_io.py`)
+   - Thin sync facade over the vendored `ophyd_websocket.device_registry`
+   - `load_devices(config)` — executes `config.oas_startup_file` and registers ophyd Device instances found at module top level
+   - `read_device(name, component=None)` — returns cached values + connection status
+   - `set_device(config, name, value, component=None)` — gates writes on the bluesky queueserver being reachable + idle, then calls `Device.set()`
+   - `check_queueserver(config)` — sync HTTP poll of `http://{QSERVER_HOST}:{QSERVER_PORT}/api/status`
+   - All instrument I/O goes through ophyd → EPICS Channel Access (via `pyepics`); the queueserver is contacted via plain HTTP for safety checks only
+
+9. **Vendored OAS** (`ophyd_websocket/`)
+   - Vendored copy of the upstream Ophyd-as-a-Service FastAPI server
+   - bait imports **only** `device_registry.device_registry` from this package
+   - Standalone server (`server.py`) and four WebSocket routers exist but are not used by bait
+   - **See `src/bait/ophyd_websocket/CLAUDE.md` before touching anything in this directory** — that file maps every file/route/protocol, lists all env vars, and documents known concerns (especially the apsbits namespace mismatch with `make_devices`)
+
+## BITS Integration
+
+Bait is the AI agent framework; the per-instrument BITS package (e.g. `tomo-bits` for the 2-BM beamline) supplies the device definitions, startup file, and queueserver script. Bait's `BaitConfig.bits` block points at the BITS repo and resolves derived paths from it.
+
+Default layout when `bits.path: /Users/ecodrea/tomo-bits` and `bits.instrument_name: tomo_2bm`:
+
+| BaitConfig path | Resolves to |
+|-----------------|-------------|
+| `bits.skills_dir` | `{bits.path}/.claude/skills/ophyd-device-control` |
+| `bits.queueserver_script` | `{bits.path}/scripts/{instrument_name}_qs_host.sh` |
+| `bits.oas_startup_file` | `{bits.path}/src/{instrument_name}/startup.py` |
+
+The bait config itself lives in the BITS repo at `{bits.path}/configs/bait_config.yaml`.
+
+### Runtime environment
+
+The runtime stack (ophyd, pyepics, apsbits, bluesky, bluesky-queueserver, bait) lives in a single environment named **`bait_tomo`**. bait is published via `uv`, so `uv venv` / `uv pip install -e .` provisions it; the env name is a convention, not a tool requirement.
+
+### Bluesky queueserver
+
+Bait does not start the queueserver — the BITS repo owns it. Start/stop it via:
+
+```bash
+bash /Users/ecodrea/tomo-bits/scripts/tomo_2bm_qs_host.sh {start|stop|status|restart}
+```
+
+The script launches `bluesky-httpserver` on `localhost:60610` (plain HTTP, no SSL) plus the queueserver RE manager in a screen session. Bait's `device_io.check_queueserver` polls `http://localhost:60610/api/status` before allowing any device write; when `ophyd_websocket.require_qserver: true` in the config (default for `tomo`), writes are blocked if the queueserver is unreachable or running an experiment.
+
+### Device loading flow
+
+1. FastAPI lifespan startup calls `device_io.load_devices(config)`
+2. `device_registry.load_startup_files(config.oas_startup_file)` execs the BITS `startup.py`
+3. The registry harvests **module-top-level** `Device` / `EpicsSignal` instances and registers them by attribute name
+4. The bits_agent's `read_device(name)` tool and the HITL-confirmed `set_device(name, value)` path query the registry directly
+
+**apsbits handling:** `apsbits.make_devices()` writes Devices into a guarneri Instrument's registry (and `sys.modules["__main__"]`), not into the loaded startup module's namespace. `device_io.load_devices` handles this by running the upstream scan first (so example-style startups still work), then harvesting anything new from `sys.modules["apsbits.core.instrument_init"]._instrument.devices`. See `tests/test_device_io.py` for the harvest contract and `src/bait/ophyd_websocket/CLAUDE.md` for the full diagnosis.
+
 ## Key Configuration
 
 All configuration is centralized in `config.yaml`:

@@ -1,26 +1,3 @@
-"""WebSocket router for tailing the Bluesky queue-server console.
-
-Endpoint: ``ws://<host>:<port>/api/v1/qs-console-socket``
-
-Subscribes to a ZMQ ``SUB`` socket where the queue-server's console publisher
-broadcasts plan/log output, and forwards every line (except the literal
-``"QS_Console"`` heartbeat) to the connected WebSocket client. One ZMQ
-context+socket per WS connection — close the WS to release them.
-
-Environment:
-  - ``ZMQ_HOST`` (default ``localhost``) — host of the QS console publisher.
-  - ``ZMQ_PORT`` (default ``60625``) — port. Note this is NOT the QS HTTP
-    port (60610) or the QS ZMQ control port (60615); console publishing uses
-    its own bound port.
-
-Client → server messages are logged but otherwise ignored — this is a
-one-way stream from the server's perspective.
-
-Intended use: a UI panel that shows live plan execution output (the same
-text you'd see in the screen session running the QS RE manager). Useful
-when bait or another orchestrator submits a plan and you want to display
-progress to the operator without parsing it.
-"""
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import zmq
 import asyncio
@@ -35,7 +12,7 @@ router = APIRouter()
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logging.info("New WebSocket connection")
-
+    
     context = zmq.Context()
     socket = context.socket(zmq.SUB)
 
@@ -69,3 +46,5 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         socket.close()
         context.term()
+
+

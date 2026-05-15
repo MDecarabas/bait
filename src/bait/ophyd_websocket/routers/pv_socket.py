@@ -1,40 +1,3 @@
-"""WebSocket router for live EPICS PV monitoring and control.
-
-Endpoint: ``ws://<host>:<port>/api/v1/pv-socket``
-
-Per-connection state (no shared registry — each socket has its own
-``subscriptions`` dict). Subscribing to a PV creates a fresh
-``EpicsSignal``/``EpicsSignalRO`` in this process and pushes value/metadata
-updates to the client whenever ophyd's CA monitor fires.
-
-Client → server messages are JSON with an ``action`` key:
-
-  - ``subscribe`` — ``{action: "subscribe", pv: "IOC:m1"}``: subscribes
-    even if the PV isn't yet connected; updates flow once it does connect.
-  - ``subscribeSafely`` — same as ``subscribe`` but rejects if the initial
-    ``signal.get()`` fails (use when the caller needs a connected PV).
-  - ``subscribeReadOnly`` — same as ``subscribe`` but creates an
-    ``EpicsSignalRO`` (no write methods).
-  - ``unsubscribe`` — ``{action: "unsubscribe", pv: "IOC:m1"}``.
-  - ``refresh`` — re-issue ``.get()`` on every subscribed PV.
-  - ``set`` — ``{action: "set", pv: "IOC:m1", value: 10, timeout: 1}``.
-    Value coercion: numeric-looking strings become int/float. Limits are
-    checked against ``signal.low_limit``/``signal.high_limit`` (skipped
-    when the two are equal, which is how area-detector PVs signal "no
-    limit"). Strings go via ``signal.put(..., use_complete=True)``,
-    numbers via ``signal.set(...).wait(timeout=...)``.
-
-Server → client messages:
-  - Value updates: ``{pv, value, timestamp, connected, read_access, write_access}``
-  - Metadata updates: kwargs from ophyd's ``meta`` event (with ``obj`` rewritten
-    to the PV name so the payload is JSON-serializable).
-  - Errors: ``{error: "..."}``.
-
-Intended use: lightweight browser/dashboard clients that need raw-PV access
-without going through the device registry. For *ophyd Device* subscription
-(walks Device components and aggregates connection state), use
-``device_socket`` instead.
-"""
 import asyncio
 import json
 import numpy as np
@@ -50,7 +13,7 @@ router = APIRouter()
 @router.websocket("/pv-socket")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-
+       
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -148,7 +111,7 @@ async def websocket_endpoint(websocket: WebSocket):
             subscriptions[pv_name].get()
         await websocket.send_json({"message": "Refreshed all PVs"})
         return
-
+    
     async def handleSet(data):
         pv_name = data.get("pv")
         if not pv_name:
@@ -157,12 +120,12 @@ async def websocket_endpoint(websocket: WebSocket):
         if pv_name not in subscriptions:
             await websocket.send_json({"error": f"PV {pv_name} is not subscribed. Subscribe to PV before setting value."})
             return
-
+        
         signal = subscriptions.get(pv_name)
         if signal.write_access == False:
             await websocket.send_json({"error": f"Write access is not enabled for PV {pv_name}. Cannot set value."})
             return
-
+        
         value = data.get("value")
         try:
             # Try to convert to number if it looks like one
@@ -174,7 +137,7 @@ async def websocket_endpoint(websocket: WebSocket):
         except ValueError:
             await websocket.send_json({"error": f"Value must be a number. Could not set value of {pv_name} to {value}"})
             return
-
+        
         timeout = data.get("timeout", 1) #default 1 second timeout
         if not isinstance(timeout, (int, float)):
             await websocket.send_json({"error": f"Timeout must be a number. Could not set value of {pv_name} to {value}"})
@@ -182,13 +145,13 @@ async def websocket_endpoint(websocket: WebSocket):
         if isinstance(value, (int, float)):
             low_limit = signal.low_limit
             high_limit = signal.high_limit
-
+        
             if (low_limit is not None and value < low_limit) or (high_limit is not None and value > high_limit):
                 #area detector limits have a low limit === high limit by default.
                 if (low_limit != high_limit):
                     await websocket.send_json({"error": f"Value {value} is outside of limits for PV {pv_name}. Low limit: {low_limit}, High limit: {high_limit}"})
                     return
-
+        
         try:
             if isinstance(value, str):
                 signal.put(value, wait=True, timeout=timeout, use_complete=True)
@@ -220,7 +183,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if action == "subscribe":
                     await handleSubscribe(data)
                     continue
-
+                
                 if action == "subscribeSafely":
                     await handleSubscribe(data, requireConnection=True)
                     continue

@@ -1,53 +1,3 @@
-"""WebSocket router for live area-detector image streaming.
-
-Endpoint: ``ws://<host>:<port>/api/v1/camera-socket``
-
-Streams JPEG-encoded frames from an EPICS area detector. Designed for the
-``ADSimDetector`` PV layout by default (PVs prefixed with ``13SIM1:``) so
-that connecting with no init payload "just works" against any standard
-EPICS test installation; arbitrary detectors are supported by passing a
-custom ``imageArray_PV`` and per-setting overrides on the first message.
-
-Init handshake (first client → server message after accept):
-
-  ``{
-      "imageArray_PV": "MYDET:image1:ArrayData",  // optional
-      "startX": "MYDET:cam1:MinX",                // optional per-setting overrides
-      "startY": "...",
-      "sizeX": "...",
-      "sizeY": "...",
-      "colorMode": "...",
-      "dataType": "...",
-      "binX": "...",
-      "binY": "..."
-  }``
-
-If only ``imageArray_PV`` is given, the per-setting PVs are derived by stripping
-the suffix from each default and re-attaching it to the new prefix.
-
-After init the server pushes:
-  - JSON ``{x, y, colorMode, dataType}`` on every dimension change.
-  - Binary JPEG bytes on every new frame.
-
-Client → server while streaming:
-  - ``{"toggleLogNormalization": bool}`` switches between linear (max-scale)
-    and log normalization. Server echoes ``{"logNormalization": bool}``.
-
-Other constants (currently module-level, not configurable per-connection):
-  - ``max_dimension = 2500`` — frames larger than 2500 px on either axis are
-    LANCZOS-resized before JPEG encoding.
-  - JPEG quality 100.
-  - ``buffer = asyncio.Queue(maxsize=1000)`` per connection — drops oldest frame
-    when full.
-
-Supported color modes / data types come from ophyd ``enum_strs`` if the camera
-exposes them, falling back to ``Mono/RGB1/RGB2/RGB3`` and the int/uint/float
-families in ``dtype_map``.
-
-Intended use: a beamline live-view UI showing the most recent acquisition.
-Not a substitute for the IOC's own array-data plugin pipeline — this is for
-human eyes, not analysis.
-"""
 import asyncio
 import json
 import time
@@ -74,7 +24,7 @@ dtype_map = {
     'Int64': np.int64,
     'UInt64': np.uint64,
     'Float32': np.float32,
-    'Float64': np.float64
+    'Float64': np.float64 
 }
 
 color_mode_enum_list = ['Mono', 'RGB1', 'RGB2', 'RGB3']
@@ -292,7 +242,7 @@ def normalize_array_data(array_data, dataType):
 def log_normalize_to_255(data: np.ndarray) -> np.ndarray:
     if np.any(data < 0):
         raise ValueError("Input data must be non-negative for log normalization.")
-
+    
     # Avoid log(0) by shifting
     data = data + 1.0
 
@@ -332,7 +282,7 @@ def reshape_array(array_data, height, width, colorMode):
         mode = 'RGB'
     else:
         raise ValueError(f"Unsupported color mode: {colorMode}")
-
+    
     return reshaped_data, mode
 
 def get_buffer(rawImageArray, height, width, colorMode, dataType):

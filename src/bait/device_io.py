@@ -8,6 +8,7 @@ call these helpers directly.
 
 import logging
 import os
+import sys
 from typing import Any, Optional
 
 import httpx
@@ -34,11 +35,52 @@ def _coerce_numeric(value):
 
 
 def load_devices(config: BaitConfig) -> list[str]:
-    """Populate device_registry from config.oas_startup_file. Returns names."""
+    """Populate device_registry from config.oas_startup_file. Returns names.
+
+    Two harvest paths run in sequence:
+      1. The vendored device_registry scans the loaded module's top-level
+         names — works for example_startup.py-style files.
+      2. apsbits.make_devices writes Devices into a guarneri Instrument's
+         registry rather than the module namespace, so we additionally
+         pull from apsbits.core.instrument_init._instrument when present.
+    """
     startup_file = str(config.oas_startup_file)
     device_registry.clear()
     device_registry.load_startup_files(startup_file)
+    extra = _harvest_apsbits_oregistry()
+    if extra:
+        logger.info("[load_devices] harvested %d apsbits device(s)", extra)
     return device_registry.list_devices()
+
+
+def _harvest_apsbits_oregistry() -> int:
+    """Pick up devices created by apsbits.make_devices.
+
+    Returns the count newly added to device_registry. No-op when apsbits
+    isn't loaded or hasn't initialized an instrument yet.
+    """
+    module = sys.modules.get("apsbits.core.instrument_init")
+    if module is None:
+        return 0
+    instrument = getattr(module, "_instrument", None)
+    if instrument is None or not hasattr(instrument, "devices"):
+        return 0
+    oregistry = instrument.devices
+    if not hasattr(oregistry, "device_names"):
+        return 0
+    existing = set(device_registry.list_devices())
+    added = 0
+    for name in oregistry.device_names:
+        if name in existing:
+            continue
+        try:
+            device_registry.add_device(name, oregistry[name])
+            added += 1
+        except (ValueError, KeyError) as exc:
+            logger.warning(
+                "[harvest_apsbits] skipping %r: %s", name, exc
+            )
+    return added
 
 
 def read_device(name: str, component: Optional[str] = None) -> dict[str, Any]:

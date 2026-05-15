@@ -6,8 +6,8 @@ from pydantic import BaseModel
 from ophyd import EpicsSignal
 
 # Import queue server utilities
-from ..device_registry import device_registry
-from ..queue_safety import queue_safety_required, get_queue_server_status
+from device_registry import device_registry
+from queue_safety import queue_safety_required, get_queue_server_status
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -16,14 +16,14 @@ pv_dict={}
 
 # link for commands for a device: https://nsls-ii.github.io/ophyd/generated/ophyd.device.Device.html#ophyd.device.Device
 
-class DeviceInstruction(BaseModel):
+class EpicsPVInstruction(BaseModel): 
     pv: str
-    set_value: int
+    set_value: Union[str, int, float]
     timeout: int | None = None
 
-class DeviceSetInstruction(BaseModel):
+class OphydDeviceInstruction(BaseModel): 
     device: str
-    value: Union[str, int, float]
+    set_value: Union[str, int, float]
     component: str | None = None
     timeout: int | None = None
 
@@ -33,17 +33,17 @@ router = APIRouter()
 def load_devices_from_startup(response: Response):
     """
     Manually load devices from the startup directory
-
+    
     This endpoint loads devices from the startup directory that was specified
     when the server was started with --startup-dir flag. Useful for reloading
     devices without restarting the server.
     """
     logger.info("[LOAD_DEVICES] Endpoint called")
-
+    
     # Get startup directory from device registry
     startup_dir = device_registry.get_startup_dir()
     logger.info(f"[LOAD_DEVICES] Retrieved startup directory: {startup_dir}")
-
+    
     if not startup_dir:
         logger.warning("[LOAD_DEVICES] No startup directory found - returning error")
         response.status_code = status.HTTP_400_BAD_REQUEST
@@ -52,22 +52,22 @@ def load_devices_from_startup(response: Response):
             "message": "Server was not started with --startup-dir flag. Cannot load devices.",
             "suggestion": "Restart server with: python server.py --startup-dir /path/to/startup/files"
         }
-
+    
     try:
         logger.info(f"[LOAD_DEVICES] Starting device loading process from: {startup_dir}")
-
+        
         # Clear existing devices first
         device_count_before = len(device_registry.list_devices())
         logger.info(f"[LOAD_DEVICES] Device count before clearing: {device_count_before}")
         device_registry.clear()
-
+        
         # Load devices from startup directory
         logger.info(f"[LOAD_DEVICES] Loading devices from: {startup_dir}")
         device_registry.load_startup_files(startup_dir)
-
+        
         devices = device_registry.list_devices()
         logger.info(f"[LOAD_DEVICES] Successfully loaded {len(devices)} devices: {devices}")
-
+        
         return {
             "success": True,
             "message": f"Successfully loaded {len(devices)} devices from startup directory",
@@ -76,7 +76,7 @@ def load_devices_from_startup(response: Response):
             "previous_device_count": device_count_before,
             "new_device_count": len(devices)
         }
-
+        
     except Exception as e:
         logger.error(f"[LOAD_DEVICES] Error loading devices: {str(e)}")
         logger.exception(e)
@@ -91,7 +91,7 @@ def load_devices_from_startup(response: Response):
 def list_devices():
     """
     List all devices in the device registry
-
+    
     Returns a list of device names that have been loaded from startup files
     or manually added to the registry.
     """
@@ -113,7 +113,7 @@ def list_devices():
 def get_device_info(device_name: str, response: Response):
     """
     Get detailed information about a specific device
-
+    
     Returns device information including type, connection status, and description
     """
     info = device_registry.get_device_info(device_name)
@@ -123,11 +123,11 @@ def get_device_info(device_name: str, response: Response):
         response.status_code = status.HTTP_404_NOT_FOUND
         return {"error": f"Device '{device_name}' not found in registry"}
 
-@router.get("/devices-info", status_code=200, tags=["Ophyd Devices"])
+@router.get("/devices-info", status_code=200, tags=["Ophyd Devices"])  
 def get_all_devices_info():
     """
     Get detailed information about all devices in the registry
-
+    
     Returns comprehensive information for all registered devices
     """
     return {
@@ -137,13 +137,13 @@ def get_all_devices_info():
 
 @router.put("/devices", status_code=200, tags=["Ophyd Devices"])
 @queue_safety_required
-async def set_device_value(instruction: DeviceSetInstruction, response: Response):
+async def set_device_value(instruction: OphydDeviceInstruction, response: Response):
     """
     Set a value on a device from the device registry
-
+    
     This endpoint includes safety checks to prevent device movements while
     the queue server RE is running a plan.
-
+    
     Args:
         instruction: Device set instruction containing:
             - device: Name of the device in the registry
@@ -159,12 +159,12 @@ async def set_device_value(instruction: DeviceSetInstruction, response: Response
             "error": f"Device '{instruction.device}' not found in registry",
             "available_devices": device_registry.list_devices()
         }
-
+    
     try:
         # Determine target object (device or component)
         target = device
         target_name = instruction.device
-
+        
         if instruction.component:
             if not hasattr(device, instruction.component):
                 response.status_code = status.HTTP_400_BAD_REQUEST
@@ -174,7 +174,7 @@ async def set_device_value(instruction: DeviceSetInstruction, response: Response
                 }
             target = getattr(device, instruction.component)
             target_name = f"{instruction.device}.{instruction.component}"
-
+        
         # Check if target has set method
         if not hasattr(target, 'set'):
             response.status_code = status.HTTP_400_BAD_REQUEST
@@ -182,10 +182,10 @@ async def set_device_value(instruction: DeviceSetInstruction, response: Response
                 "error": f"Target '{target_name}' does not support set operations",
                 "target_type": type(target).__name__
             }
-
+        
         # Perform the set operation
-        set_result = target.set(instruction.value)
-
+        set_result = target.set(instruction.set_value)
+        
         # Apply timeout if specified
         if instruction.timeout is not None:
             set_result.wait(timeout=instruction.timeout)
@@ -200,15 +200,15 @@ async def set_device_value(instruction: DeviceSetInstruction, response: Response
         else:
             return {
                 "success": True,
-                "message": f"Set operation initiated for {target_name} to {instruction.value}",
+                "message": f"Set operation initiated for {target_name} to {instruction.set_value}",
                 "device": instruction.device,
                 "component": instruction.component,
-                "value": instruction.value,
+                "value": instruction.set_value,
                 "note": "No timeout specified - operation may complete asynchronously"
             }
-
+        
     except Exception as error:
-        logger.error(f"Could not set device {target_name} to {instruction.value}")
+        logger.error(f"Could not set device {target_name} to {instruction.set_value}")
         logger.error(f"Error details: {error}")
         response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         return {
@@ -216,14 +216,14 @@ async def set_device_value(instruction: DeviceSetInstruction, response: Response
             "message": str(error),
             "device": instruction.device,
             "component": instruction.component,
-            "value": instruction.value
+            "value": instruction.set_value
         }
 
 @router.get("/queue-server/status", tags=["Queue Server"])
 async def get_queue_server_status_endpoint():
     """
     Proxy GET request to queue server status endpoint
-
+    
     Returns the status from the queue server's HTTP API at /api/status
     Environment variables:
     - QSERVER_HTTP_SERVER_HOST (default: localhost)
@@ -271,13 +271,13 @@ def connect_to_pv(pv, response: Response):
 
         pv_dict[pv] = testSignal
         return {"201" : "PV " + pv + " is connected"}
-
+    
 @router.put("/pvs", status_code=200, tags=["EPICS PVs"])
 @queue_safety_required
-async def set_pv_value(instruction: DeviceInstruction, response: Response):
+async def set_pv_value(instruction: EpicsPVInstruction, response: Response):
     """
     Move a device to a new position
-
+    
     This endpoint includes safety checks to prevent device movements while
     the queue server RE is running a plan.
     """
@@ -311,8 +311,8 @@ async def set_pv_value(instruction: DeviceInstruction, response: Response):
             logger.error(f"Error details: {error}")
             response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
             return{"500 Error" : "Could not move device " + instruction.pv}
-
-
+    
+    
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
