@@ -111,13 +111,14 @@ def test_queueserver_script_override(write_config):
 
 
 def test_oas_startup_file_default(write_config):
-    """No override → bundled default_oas_startup.py from bait.devices."""
-    write_config(extra={"bits": {"path": "/some/path"}})
+    """No override → {bits.path}/src/{instrument_name}/startup.py (BITS convention)."""
+    write_config(
+        extra={"bits": {"path": "/some/path", "instrument_name": "tomo_2bm"}}
+    )
     from bait.config import BaitConfig
 
     config = BaitConfig()
-    assert config.oas_startup_file.name == "default_oas_startup.py"
-    assert config.oas_startup_file.is_file()
+    assert config.oas_startup_file == Path("/some/path/src/tomo_2bm/startup.py")
 
 
 def test_oas_startup_file_override(write_config):

@@ -14,8 +14,8 @@ import yaml
 _BASE_CONFIG: Dict[str, Any] = {
     "project": {"name": "test"},
     "bits": {"path": ""},
-    # Tests must not spawn the OAS server subprocess by default.
-    "ophyd_websocket": {"enabled": False, "auto_start": False},
+    # Tests must not gate writes on a real queue server being reachable.
+    "ophyd_websocket": {"require_qserver": False},
     "agents": {
         "router": {"system_prompt": "test classifier prompt"},
         "doc_agent": {"system_prompt": "test expert on this project prompt"},

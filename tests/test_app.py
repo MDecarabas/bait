@@ -223,21 +223,17 @@ def test_chat_returns_pending_id_when_writes_proposed(write_config, monkeypatch)
 
 
 def test_confirm_approved_executes_writes(write_config, monkeypatch):
-    """Approved confirm calls OASClient.set_device once per staged write."""
+    """Approved confirm calls device_ops.set_device once per staged write."""
     write_config()
 
     calls = []
 
-    class FakeOAS:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def set_device(self, name, value, component=None, timeout=5):
-            calls.append((name, value, component))
-            return {"ok": True, "result": {"success": True}}
+    def fake_set(config, *, name, value, component=None, timeout=5):
+        calls.append((name, value, component))
+        return {"ok": True, "result": {"success": True}}
 
     client = _make_client(monkeypatch, route_question=_staged_write_route())
-    monkeypatch.setattr("bait.app.OASClient", FakeOAS)
+    monkeypatch.setattr("bait.app.device_ops.set_device", fake_set)
 
     chat = client.post("/chat", json={"query": "set motor to 5"}).json()
     pid = chat["pending_id"]
@@ -251,18 +247,14 @@ def test_confirm_approved_executes_writes(write_config, monkeypatch):
 
 
 def test_confirm_denied_does_not_execute(write_config, monkeypatch):
-    """Denied confirm pops the staged writes without calling OAS."""
+    """Denied confirm pops the staged writes without calling device_ops.set_device."""
     write_config()
 
-    class BoomOAS:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        def set_device(self, *_a, **_kw):
-            raise AssertionError("set_device should not be called when denied")
+    def boom(*_a, **_kw):
+        raise AssertionError("set_device should not be called when denied")
 
     client = _make_client(monkeypatch, route_question=_staged_write_route())
-    monkeypatch.setattr("bait.app.OASClient", BoomOAS)
+    monkeypatch.setattr("bait.app.device_ops.set_device", boom)
 
     chat = client.post("/chat", json={"query": "set motor to 5"}).json()
     pid = chat["pending_id"]

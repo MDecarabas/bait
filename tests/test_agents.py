@@ -30,23 +30,17 @@ class FakeRetriever:
         return self.results
 
 
-class FakeOASClient:
-    """In-memory OAS stand-in. Records set_device calls; returns canned reads."""
+class FakeDeviceReader:
+    """Records read_device calls; returns a canned value. Callable so it can
+    be passed directly as ``device_reader`` to ``build_graph``."""
 
     def __init__(self, read_value=42):
         self._read_value = read_value
         self.read_calls: list[tuple[str, str | None]] = []
-        self.set_calls: list[dict] = []
 
-    def read_device(self, name, component=None):
+    def __call__(self, name, component=None):
         self.read_calls.append((name, component))
         return {"ok": True, "value": self._read_value, "connected": True}
-
-    def set_device(self, name, value, component=None, timeout=5):
-        self.set_calls.append(
-            {"name": name, "value": value, "component": component, "timeout": timeout}
-        )
-        return {"ok": True, "result": {"success": True}}
 
 
 def _scripted_llm_chat(scripts: dict[str, list[dict]]):
@@ -86,7 +80,7 @@ def make_graph(base_config, fake_clients):
         scripts,
         retriever=None,
         device_skills="some device skills",
-        oas_client=None,
+        device_reader=None,
     ):
         return build_graph(
             base_config,
@@ -96,7 +90,7 @@ def make_graph(base_config, fake_clients):
             doc_client=doc_c,
             bits_client=bits_c,
             device_skills=device_skills,
-            oas_client=oas_client or FakeOASClient(),
+            device_reader=device_reader or FakeDeviceReader(),
         )
 
     return _build
@@ -140,7 +134,7 @@ def test_build_graph_returns_compiled(base_config, fake_clients):
         doc_client=doc_c,
         bits_client=bits_c,
         device_skills="",
-        oas_client=FakeOASClient(),
+        device_reader=FakeDeviceReader(),
     )
     assert graph is not None
     assert hasattr(graph, "invoke")
@@ -296,10 +290,10 @@ def _bits_tool_call(name: str, arguments: dict, call_id: str = "tc"):
 
 
 def test_bits_read_tool_returns_value(make_graph):
-    """A device read flows through OASClient and is summarised by the LLM."""
+    """A device read flows through device_reader and is summarised by the LLM."""
     from bait.agents import route_question
 
-    oas = FakeOASClient(read_value=1.5)
+    reader = FakeDeviceReader(read_value=1.5)
     graph = make_graph(
         scripts={
             "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
@@ -313,21 +307,23 @@ def test_bits_read_tool_returns_value(make_graph):
                 {"text": "rotation_start is at 1.5", "tool_calls": None, "stop": True},
             ],
         },
-        oas_client=oas,
+        device_reader=reader,
     )
 
     answer, pending = route_question("what is rotation_start?", graph=graph)
     assert pending == []
     assert "1.5" in answer
-    assert oas.read_calls == [("tomoscan", "rotation_start")]
-    assert oas.set_calls == []
+    assert reader.read_calls == [("tomoscan", "rotation_start")]
 
 
 def test_bits_set_stages_pending_write(make_graph):
-    """A set_device call stages the write — the OAS client is never hit."""
+    """A set_device call stages the write — no device write happens here.
+
+    The agent has no callable for writes; the only path that executes a write
+    is the /chat/confirm endpoint. So observing pending_writes is enough.
+    """
     from bait.agents import route_question
 
-    oas = FakeOASClient()
     graph = make_graph(
         scripts={
             "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
@@ -346,11 +342,9 @@ def test_bits_set_stages_pending_write(make_graph):
                 },
             ],
         },
-        oas_client=oas,
     )
 
     answer, pending = route_question("set rotation_start to 5", graph=graph)
-    assert oas.set_calls == [], "set_device must not be executed by the agent loop"
     assert len(pending) == 1
     assert pending[0]["name"] == "tomoscan"
     assert pending[0]["value"] == 5.0
@@ -362,7 +356,6 @@ def test_bits_set_with_no_component_stages_correctly(make_graph):
     """Component is optional; stages a top-level device write."""
     from bait.agents import route_question
 
-    oas = FakeOASClient()
     graph = make_graph(
         scripts={
             "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
@@ -374,13 +367,11 @@ def test_bits_set_with_no_component_stages_correctly(make_graph):
                 {"text": "Proposing motor=10.", "tool_calls": None, "stop": True},
             ],
         },
-        oas_client=oas,
     )
 
     _, pending = route_question("move motor to 10", graph=graph)
     assert len(pending) == 1
     assert pending[0]["component"] is None
-    assert oas.set_calls == []
 
 
 def test_bits_loop_capped(make_graph):
@@ -392,7 +383,7 @@ def test_bits_loop_capped(make_graph):
     )
 
     looping = _bits_tool_call("read_device", {"name": "x"}, call_id="loop")
-    oas = FakeOASClient()
+    reader = FakeDeviceReader()
     graph = make_graph(
         scripts={
             "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
@@ -401,13 +392,13 @@ def test_bits_loop_capped(make_graph):
             ],
             "expert on BITS": [looping] * (MAX_BITS_TOOL_ITERATIONS + 5),
         },
-        oas_client=oas,
+        device_reader=reader,
     )
 
     answer, pending = route_question("loop forever", graph=graph)
     assert answer == BITS_LOOP_FALLBACK
     assert pending == []
-    assert len(oas.read_calls) == MAX_BITS_TOOL_ITERATIONS
+    assert len(reader.read_calls) == MAX_BITS_TOOL_ITERATIONS
 
 
 def test_bits_empty_answer_fallback_when_writes_pending(make_graph):
