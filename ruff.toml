@@ -19,6 +19,8 @@ exclude = [
     "dist",
     "node_modules",
     "venv",
+    # Vendored upstream code from ophyd-websocket — keep verbatim.
+    "src/bait/ophyd_websocket",
 ]
 line-length = 88
 indent-width = 4
