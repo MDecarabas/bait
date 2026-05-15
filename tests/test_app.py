@@ -223,7 +223,7 @@ def test_chat_returns_pending_id_when_writes_proposed(write_config, monkeypatch)
 
 
 def test_confirm_approved_executes_writes(write_config, monkeypatch):
-    """Approved confirm calls device_ops.set_device once per staged write."""
+    """Approved confirm calls device_io.set_device once per staged write."""
     write_config()
 
     calls = []
@@ -233,7 +233,7 @@ def test_confirm_approved_executes_writes(write_config, monkeypatch):
         return {"ok": True, "result": {"success": True}}
 
     client = _make_client(monkeypatch, route_question=_staged_write_route())
-    monkeypatch.setattr("bait.app.device_ops.set_device", fake_set)
+    monkeypatch.setattr("bait.app.device_io.set_device", fake_set)
 
     chat = client.post("/chat", json={"query": "set motor to 5"}).json()
     pid = chat["pending_id"]
@@ -247,14 +247,14 @@ def test_confirm_approved_executes_writes(write_config, monkeypatch):
 
 
 def test_confirm_denied_does_not_execute(write_config, monkeypatch):
-    """Denied confirm pops the staged writes without calling device_ops.set_device."""
+    """Denied confirm pops the staged writes without calling device_io.set_device."""
     write_config()
 
     def boom(*_a, **_kw):
         raise AssertionError("set_device should not be called when denied")
 
     client = _make_client(monkeypatch, route_question=_staged_write_route())
-    monkeypatch.setattr("bait.app.device_ops.set_device", boom)
+    monkeypatch.setattr("bait.app.device_io.set_device", boom)
 
     chat = client.post("/chat", json={"query": "set motor to 5"}).json()
     pid = chat["pending_id"]

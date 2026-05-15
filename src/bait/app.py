@@ -1,5 +1,6 @@
 """FastAPI backend for Bait."""
 
+import asyncio
 import json
 import logging
 import re
@@ -12,9 +13,10 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from . import device_io
 from .agents import ARGO_UNAVAILABLE_MESSAGE, route_question
 from .config import BaitConfig, get_config
-from .devices import OASClient, check_queueserver, ensure_server
+from .device_io import check_queueserver
 
 logger = logging.getLogger(__name__)
 
@@ -32,22 +34,27 @@ _pending_store: dict[str, list[dict]] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Spawn the OAS server on startup; terminate the subprocess on shutdown."""
+    """Load ophyd devices into the in-process registry; warn if QS is down."""
     config = get_config()
-    proc = ensure_server(config)
+    try:
+        # bluesky's BestEffortCallback (instantiated by BITS' init_bec_peaks)
+        # demands a Qt teleporter pre-created on the main thread before any
+        # background-thread instantiation.
+        from bluesky.callbacks.mpl_plotting import initialize_qt_teleporter
+        initialize_qt_teleporter()
+        # apsbits.make_devices() inside the BITS startup file calls
+        # asyncio.run(), which forbids a running loop. The lifespan runs
+        # inside uvicorn's loop, so dispatch to a worker thread that has
+        # none.
+        loaded = await asyncio.to_thread(device_io.load_devices, config)
+        logger.info("[startup] loaded %d device(s): %s", len(loaded), loaded)
+    except Exception:
+        logger.exception("[startup] failed to load devices from %s",
+                         config.oas_startup_file)
     qs_up, qs_alert = check_queueserver(config)
     if not qs_up:
         logger.warning("[startup] %s", qs_alert)
-    try:
-        yield
-    finally:
-        if proc is not None and proc.poll() is None:
-            logger.info("[shutdown] terminating spawned OAS subprocess")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
+    yield
 
 
 api = FastAPI(lifespan=lifespan)
@@ -150,23 +157,14 @@ async def confirm_endpoint(
     if not request.approved:
         return {"results": [], "denied": True}
 
-    client = OASClient(
-        f"http://{config.ophyd_websocket.host}:{config.ophyd_websocket.port}"
-    )
     results: list[dict[str, Any]] = []
     for write in writes:
-        result = client.set_device(
+        result = device_io.set_device(
+            config,
             name=write["name"],
             value=write["value"],
             component=write.get("component"),
         )
-        # If the write was rejected because the queue server is locked or
-        # unreachable, surface the run-the-script alert so the user sees what
-        # to do next.
-        if not result.get("ok") and "queue" in str(result.get("error", "")).lower():
-            _, alert = check_queueserver(config)
-            if alert:
-                result["qs_alert"] = alert
         results.append({"write": write, "result": result})
     return {"results": results, "denied": False}
 

@@ -212,41 +212,23 @@ class BITSConfig(BaseModel):
     oas_startup_file: Optional[str] = Field(
         default=None,
         description=(
-            "Override path to the ophyd-websocket startup .py file. "
-            "Defaults to bait's bundled default_oas_startup.py (sim devices)."
+            "Override path to the ophyd startup .py file. "
+            "Defaults to {path}/src/{instrument_name}/startup.py "
+            "(the BITS package convention)."
         ),
     )
 
 
 class OphydWebsocketConfig(BaseModel):
-    """ophyd-websocket OAS server settings (server lifecycle, not BITS paths)."""
+    """In-process OAS settings. (No subprocess — bait imports ophyd directly.)"""
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = Field(default=True, description="Whether to enable OAS at all")
-    auto_start: bool = Field(
-        default=True,
-        description="If true, spawn the OAS server on startup when not reachable",
-    )
-    repo_path: str = Field(
-        default="/Users/ecodrea/ophyd-websocket",
-        description="Filesystem path to the ophyd-websocket repository checkout",
-    )
-    host: str = Field(default="localhost", description="OAS server host")
-    port: int = Field(
-        default=8002,
-        description="OAS server port (NOT 8001 — that conflicts with bait backend)",
-    )
     require_qserver: bool = Field(
         default=True,
-        description="OAS strict mode: block writes if queue server not reachable",
-    )
-    python_executable: Optional[str] = Field(
-        default=None,
         description=(
-            "Python interpreter to use when spawning the OAS subprocess. "
-            "Defaults to sys.executable (bait's venv). Override to point at "
-            "the conda env that has ophyd installed."
+            "Strict mode: gate writes on the Bluesky queue server being "
+            "reachable AND idle. False to allow writes when QS is unreachable."
         ),
     )
 
@@ -327,14 +309,16 @@ class BaitConfig(BaseSettings):
     @computed_field
     @property
     def oas_startup_file(self) -> Path:
-        """Path to the .py file the OAS server loads to populate its registry."""
+        """Path to the .py file loaded into the device registry at startup.
+
+        Defaults to the BITS package convention:
+        ``{bits.path}/src/{instrument_name}/startup.py``.
+        """
         if self.bits.oas_startup_file:
             return Path(self.bits.oas_startup_file).expanduser()
-        # Don't import the module — it imports ophyd, which is only available
-        # in the OAS subprocess, not in tomo-bait itself.
-        import bait.devices as _devices_pkg
-
-        return Path(_devices_pkg.__file__).parent / "default_oas_startup.py"
+        return (
+            Path(self.bits.path) / "src" / self.bits.instrument_name / "startup.py"
+        )
 
     def get_agent_llm_settings(self, agent_name: str) -> dict:
         """Return LLM settings for a given agent."""

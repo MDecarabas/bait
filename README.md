@@ -293,7 +293,6 @@ uv run ruff format .                      # Format code
 | `config.py` | Centralized configuration via pydantic-settings. Provides `BaitConfig` with computed paths and per-agent LLM settings. |
 | `utils.py` | Shared factories: `get_embeddings()` for embedding models, `build_llm_client()` for cached OpenAI/Anthropic clients, `llm_chat()` SDK-agnostic wrapper, `build_tool_result_messages()` for tool results. |
 | `data_ingestion.py` | Clones Git repos, builds Sphinx docs, chunks text, embeds, and stores in ChromaDB. |
-| `retriever.py` | Shared utility for querying ChromaDB. Returns top-k relevant document chunks. |
 | `agents.py` | LangGraph StateGraph with router, doc_agent, and bits_agent nodes. Routes questions and orchestrates tool calling. |
 | `app.py` | FastAPI server: `/chat` endpoint, `/config` endpoints, and chat history CRUD (`/chat/save`, `/chat/history`, `/chat/delete`). |
 | `frontend.py` | Gradio chat interface with sidebar history management. Sends questions to backend and displays responses. |

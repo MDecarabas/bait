@@ -12,8 +12,8 @@ from typing import Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from . import device_io
 from .config import BaitConfig, get_config
-from .devices import OASClient
 from .retriever import get_documentation_retriever
 from .utils import build_llm_client, build_tool_result_messages, llm_chat
 
@@ -196,7 +196,7 @@ def build_graph(
     doc_client=None,
     bits_client=None,
     device_skills: str | None = None,
-    oas_client: OASClient | None = None,
+    device_reader: Callable | None = None,
 ):
     """Build a compiled LangGraph for the configured agents.
 
@@ -214,10 +214,8 @@ def build_graph(
         bits_client = build_llm_client(config.get_agent_llm_settings("bits_agent"))
     if device_skills is None:
         device_skills = _load_device_skills(config.bits_skills_dir)
-    if oas_client is None:
-        oas_client = OASClient(
-            f"http://{config.ophyd_websocket.host}:{config.ophyd_websocket.port}"
-        )
+    if device_reader is None:
+        device_reader = device_io.read_device
 
     router_settings = config.get_agent_llm_settings("router")
     doc_settings = config.get_agent_llm_settings("doc_agent")
@@ -318,7 +316,7 @@ def build_graph(
                     args = tc["arguments"]
                     name = tc["name"]
                     if name == "read_device":
-                        result = oas_client.read_device(
+                        result = device_reader(
                             args["name"], args.get("component")
                         )
                         tool_results.append(json.dumps(result))
