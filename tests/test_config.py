@@ -112,9 +112,7 @@ def test_queueserver_script_override(write_config):
 
 def test_oas_startup_file_default(write_config):
     """No override → {bits.path}/src/{instrument_name}/startup.py (BITS convention)."""
-    write_config(
-        extra={"bits": {"path": "/some/path", "instrument_name": "tomo_2bm"}}
-    )
+    write_config(extra={"bits": {"path": "/some/path", "instrument_name": "tomo_2bm"}})
     from bait.config import BaitConfig
 
     config = BaitConfig()
@@ -230,7 +228,9 @@ def test_cwd_config_yaml_preferred_over_bits_configs(tmp_path, monkeypatch):
 
     (tmp_path / "config.yaml").write_text(_minimal("from-cwd"))
     (tmp_path / "configs").mkdir()
-    (tmp_path / "configs" / "bait_config.yaml").write_text(_minimal("from-bits-configs"))
+    (tmp_path / "configs" / "bait_config.yaml").write_text(
+        _minimal("from-bits-configs")
+    )
 
     from bait.config import BaitConfig
 

@@ -220,7 +220,12 @@ class BITSConfig(BaseModel):
 
 
 class OphydWebsocketConfig(BaseModel):
-    """In-process OAS settings. (No subprocess — bait imports ophyd directly.)"""
+    """OAS subprocess + WebSocket client settings.
+
+    Bait spawns the vendored OAS FastAPI server as a subprocess from its own
+    FastAPI lifespan and drives devices over the device-socket WebSocket. See
+    src/bait/ophyd_websocket/CLAUDE.md for the protocol and lifecycle details.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -230,6 +235,36 @@ class OphydWebsocketConfig(BaseModel):
             "Strict mode: gate writes on the Bluesky queue server being "
             "reachable AND idle. False to allow writes when QS is unreachable."
         ),
+    )
+    host: str = Field(
+        default="localhost",
+        description="Host the OAS subprocess binds to (and the WS client connects to).",
+    )
+    port: int = Field(
+        default=8002,
+        description=(
+            "Port the OAS subprocess binds to. "
+            "8001=bait, 8000=frontend, 60610=QS-HTTP."
+        ),
+        ge=1,
+        le=65535,
+    )
+    auto_spawn: bool = Field(
+        default=True,
+        description=(
+            "If True, bait's FastAPI lifespan spawns the OAS server as a "
+            "subprocess and shuts it down on exit. Set False to run the OAS "
+            "server yourself (e.g. `python -m bait.ophyd_websocket.server "
+            "--startup-dir <file>`)."
+        ),
+    )
+    ready_timeout: int = Field(
+        default=30,
+        description=(
+            "Seconds to wait for the OAS subprocess to report devices loaded "
+            "via GET /api/v1/devices before giving up."
+        ),
+        ge=1,
     )
 
 
@@ -316,9 +351,7 @@ class BaitConfig(BaseSettings):
         """
         if self.bits.oas_startup_file:
             return Path(self.bits.oas_startup_file).expanduser()
-        return (
-            Path(self.bits.path) / "src" / self.bits.instrument_name / "startup.py"
-        )
+        return Path(self.bits.path) / "src" / self.bits.instrument_name / "startup.py"
 
     def get_agent_llm_settings(self, agent_name: str) -> dict:
         """Return LLM settings for a given agent."""

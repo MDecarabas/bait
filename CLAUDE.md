@@ -22,7 +22,9 @@ uv pip install -e .
 ### Running the Application
 
 ```bash
-# Start the FastAPI backend (port 8001)
+# Start the FastAPI backend (port 8001) — also spawns the OAS subprocess on
+# port 8002 (configurable via ophyd_websocket.port). Set
+# ophyd_websocket.auto_spawn: false in config.yaml to run OAS yourself.
 uv run start-backend
 
 # Start the Gradio frontend (port 8000)
@@ -57,6 +59,42 @@ uv run pytest --cov=tomobait
 ```
 
 ## Architecture
+
+### Process topology
+
+Four processes cooperate when bait is fully running. Two of them (bait
+backend + OAS) are spawned by `uv run start-backend`; the other two you
+start yourself.
+
+```
+┌─────────────────────────┐   EPICS CA   ┌─────────────┐
+│ queueserver (60610)     │◄────────────►│             │
+│  + start-re-manager     │              │  EPICS IOCs │
+│  loads startup.py       │              │             │
+└─────────────────────────┘              │             │
+                                         │             │
+┌─────────────────────────┐   EPICS CA   │             │
+│ OAS server (8002)       │◄────────────►│             │
+│  bait subprocess        │              └─────────────┘
+│  loads startup.py       │
+└────────────▲────────────┘
+             │  ws://localhost:8002/api/v1/device-socket
+             │  {action:'subscribe'|'set'|'unsubscribe'}
+┌────────────┴────────────┐
+│ bait backend (8001)     │  HTTP GET queueserver/api/status (safety gate)
+│  spawns + supervises OAS in lifespan
+└────────────▲────────────┘
+             │  HTTP /chat, /chat/confirm
+┌────────────┴────────────┐
+│ frontend (8000)         │
+└─────────────────────────┘
+```
+
+The queueserver and OAS each load `startup.py` and hold their own ophyd
+sessions — two independent sets of Device instances connected to the same
+EPICS PVs. EPICS is pub/sub and tolerates this. The bait-side QS safety
+check (`bait.device_io.check_queueserver`) is what prevents bait from
+pushing writes through OAS while the RunEngine is mid-plan.
 
 ### Multi-Agent System (LangGraph)
 
@@ -128,6 +166,22 @@ All data lives under `.bait-{project.name}/` (e.g., `.bait-tomo/`):
    - Save, load, and delete conversation sessions
    - Serves documentation images through Gradio's `allowed_paths` mechanism
 
+8. **Ophyd WebSocket integration**
+   - `ophyd_websocket/` — vendored OAS FastAPI server (REST + four WS routers).
+     See `src/bait/ophyd_websocket/CLAUDE.md` for the module map, lifecycle,
+     and WS protocol cheat sheet. **Read that file before touching anything
+     under that folder.**
+   - `ophyd_websocket_supervisor.py` — `OASSupervisor` class that the bait
+     backend's lifespan uses to spawn the OAS subprocess (env-configured
+     `OAS_STARTUP_DIR`/`HOST`/`PORT`), poll `/api/v1/devices` until devices
+     are loaded, and terminate cleanly on shutdown.
+   - `ophyd_ws_client.py` — sync WebSocket client (`read_device`, `set_device`)
+     used by the bits_agent's tool handlers and the `/chat/confirm` endpoint.
+     Speaks the `device-socket` protocol. No `component` support (WS-protocol
+     limitation; use the OAS REST `PUT /devices` endpoint if you need it).
+   - `device_io.py` — **just** the bait-side queueserver safety probe
+     (`check_queueserver`). All device I/O now goes through OAS over WS.
+
 ## Key Configuration
 
 All configuration is centralized in `config.yaml`:
@@ -180,6 +234,28 @@ All paths are computed properties on `BaitConfig`:
 - `config.docs_output_dir` → `.bait-{project.name}/documentation`
 - `config.chat_history_dir` → `.bait-{project.name}/chat_history`
 - `config.bits_skills_dir` → `.bait-{project.name}/bits_skills`
+
+### Ophyd device flow (end to end)
+
+1. User starts the bluesky queueserver themselves:
+   `bash {bits.path}/scripts/{bits.instrument_name}_qs_host.sh start`
+2. User starts bait: `uv run start-backend`. Lifespan spawns
+   `python -m bait.ophyd_websocket.server` on `ophyd_websocket.port`
+   (default 8002) with `OAS_STARTUP_DIR=config.oas_startup_file`. The OAS
+   subprocess imports `startup.py` and populates its device registry from
+   the same Guarneri YAMLs the queueserver uses.
+3. `OASSupervisor.wait_ready` polls `/api/v1/devices` until count > 0
+   (timeout from `ophyd_websocket.ready_timeout`).
+4. The bits_agent's `read_device`/`set_device` tool calls open a short-lived
+   WebSocket to `ws://localhost:8002/api/v1/device-socket` per call.
+5. `set_device` calls are staged (HITL) and confirmed via `/chat/confirm`,
+   which re-checks `device_io.check_queueserver` before sending the WS `set`
+   so writes never collide with a running RE plan.
+
+Run OAS manually instead (e.g. for debugging, or to share with another
+client) by setting `ophyd_websocket.auto_spawn: false` and launching it
+yourself:
+`python -m bait.ophyd_websocket.server --startup-dir <startup.py>`.
 
 ## gstack
 

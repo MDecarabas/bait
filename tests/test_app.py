@@ -204,7 +204,7 @@ def test_list_chats_skips_corrupted_file(client):
 
 
 def _staged_write_route(answer="Confirm please", writes=None):
-    writes = writes or [{"name": "motor", "value": 5, "component": None}]
+    writes = writes or [{"name": "motor", "value": 5}]
 
     def _fn(_q):
         return answer, writes
@@ -219,21 +219,21 @@ def test_chat_returns_pending_id_when_writes_proposed(write_config, monkeypatch)
     assert resp.status_code == 200
     body = resp.json()
     assert body["pending_id"], "expected a UUID pending_id"
-    assert body["pending_writes"] == [{"name": "motor", "value": 5, "component": None}]
+    assert body["pending_writes"] == [{"name": "motor", "value": 5}]
 
 
 def test_confirm_approved_executes_writes(write_config, monkeypatch):
-    """Approved confirm calls device_io.set_device once per staged write."""
+    """Approved confirm calls ophyd_ws_client.set_device once per staged write."""
     write_config()
 
     calls = []
 
-    def fake_set(config, *, name, value, component=None, timeout=5):
-        calls.append((name, value, component))
+    def fake_set(config, *, name, value, timeout=5):
+        calls.append((name, value))
         return {"ok": True, "result": {"success": True}}
 
     client = _make_client(monkeypatch, route_question=_staged_write_route())
-    monkeypatch.setattr("bait.app.device_io.set_device", fake_set)
+    monkeypatch.setattr("bait.app.ophyd_ws_client.set_device", fake_set)
 
     chat = client.post("/chat", json={"query": "set motor to 5"}).json()
     pid = chat["pending_id"]
@@ -242,19 +242,19 @@ def test_confirm_approved_executes_writes(write_config, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["denied"] is False
-    assert calls == [("motor", 5, None)]
+    assert calls == [("motor", 5)]
     assert body["results"][0]["result"]["ok"] is True
 
 
 def test_confirm_denied_does_not_execute(write_config, monkeypatch):
-    """Denied confirm pops the staged writes without calling device_io.set_device."""
+    """Denied confirm pops the staged writes without calling set_device."""
     write_config()
 
     def boom(*_a, **_kw):
         raise AssertionError("set_device should not be called when denied")
 
     client = _make_client(monkeypatch, route_question=_staged_write_route())
-    monkeypatch.setattr("bait.app.device_io.set_device", boom)
+    monkeypatch.setattr("bait.app.ophyd_ws_client.set_device", boom)
 
     chat = client.post("/chat", json={"query": "set motor to 5"}).json()
     pid = chat["pending_id"]

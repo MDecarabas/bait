@@ -46,6 +46,8 @@ dependencies = [
     "numpy>=2.2.6",
     "pillow>=10.0.0",
     "pyzmq>=25.0.0",
+    # WebSocket client used by bait.ophyd_ws_client to drive the OAS subprocess.
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]

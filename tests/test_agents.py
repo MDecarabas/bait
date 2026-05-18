@@ -36,10 +36,10 @@ class FakeDeviceReader:
 
     def __init__(self, read_value=42):
         self._read_value = read_value
-        self.read_calls: list[tuple[str, str | None]] = []
+        self.read_calls: list[str] = []
 
-    def __call__(self, name, component=None):
-        self.read_calls.append((name, component))
+    def __call__(self, name):
+        self.read_calls.append(name)
         return {"ok": True, "value": self._read_value, "connected": True}
 
 
@@ -301,19 +301,17 @@ def test_bits_read_tool_returns_value(make_graph):
                 {"text": "n/a", "tool_calls": None, "stop": True}
             ],
             "expert on BITS": [
-                _bits_tool_call(
-                    "read_device", {"name": "tomoscan", "component": "rotation_start"}
-                ),
-                {"text": "rotation_start is at 1.5", "tool_calls": None, "stop": True},
+                _bits_tool_call("read_device", {"name": "tomoscan"}),
+                {"text": "tomoscan is at 1.5", "tool_calls": None, "stop": True},
             ],
         },
         device_reader=reader,
     )
 
-    answer, pending = route_question("what is rotation_start?", graph=graph)
+    answer, pending = route_question("what is tomoscan?", graph=graph)
     assert pending == []
     assert "1.5" in answer
-    assert reader.read_calls == [("tomoscan", "rotation_start")]
+    assert reader.read_calls == ["tomoscan"]
 
 
 def test_bits_set_stages_pending_write(make_graph):
@@ -331,12 +329,9 @@ def test_bits_set_stages_pending_write(make_graph):
                 {"text": "n/a", "tool_calls": None, "stop": True}
             ],
             "expert on BITS": [
-                _bits_tool_call(
-                    "set_device",
-                    {"name": "tomoscan", "value": 5.0, "component": "rotation_start"},
-                ),
+                _bits_tool_call("set_device", {"name": "tomoscan", "value": 5.0}),
                 {
-                    "text": "I'll set rotation_start to 5.0; please confirm.",
+                    "text": "I'll set tomoscan to 5.0; please confirm.",
                     "tool_calls": None,
                     "stop": True,
                 },
@@ -344,34 +339,12 @@ def test_bits_set_stages_pending_write(make_graph):
         },
     )
 
-    answer, pending = route_question("set rotation_start to 5", graph=graph)
+    answer, pending = route_question("set tomoscan to 5", graph=graph)
     assert len(pending) == 1
     assert pending[0]["name"] == "tomoscan"
     assert pending[0]["value"] == 5.0
-    assert pending[0]["component"] == "rotation_start"
+    assert "component" not in pending[0]
     assert "confirm" in answer.lower()
-
-
-def test_bits_set_with_no_component_stages_correctly(make_graph):
-    """Component is optional; stages a top-level device write."""
-    from bait.agents import route_question
-
-    graph = make_graph(
-        scripts={
-            "classifier": [{"text": "device", "tool_calls": None, "stop": True}],
-            "expert on this project": [
-                {"text": "n/a", "tool_calls": None, "stop": True}
-            ],
-            "expert on BITS": [
-                _bits_tool_call("set_device", {"name": "motor", "value": 10}),
-                {"text": "Proposing motor=10.", "tool_calls": None, "stop": True},
-            ],
-        },
-    )
-
-    _, pending = route_question("move motor to 10", graph=graph)
-    assert len(pending) == 1
-    assert pending[0]["component"] is None
 
 
 def test_bits_loop_capped(make_graph):

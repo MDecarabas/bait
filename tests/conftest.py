@@ -14,8 +14,15 @@ import yaml
 _BASE_CONFIG: Dict[str, Any] = {
     "project": {"name": "test"},
     "bits": {"path": ""},
-    # Tests must not gate writes on a real queue server being reachable.
-    "ophyd_websocket": {"require_qserver": False},
+    # Tests must not gate writes on a real queue server being reachable, and
+    # must never try to actually spawn the OAS subprocess.
+    "ophyd_websocket": {
+        "require_qserver": False,
+        "host": "localhost",
+        "port": 8002,
+        "auto_spawn": False,
+        "ready_timeout": 5,
+    },
     "agents": {
         "router": {"system_prompt": "test classifier prompt"},
         "doc_agent": {"system_prompt": "test expert on this project prompt"},
@@ -78,4 +85,27 @@ def _reset_caches():
         _client_cache.clear()
     except Exception:
         # Modules may not be imported yet during collection; that's fine.
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _no_oas_subprocess(monkeypatch):
+    """Never actually spawn or probe the OAS subprocess from tests.
+
+    The supervisor's real start/wait_ready would either spawn a child process
+    or block for ready_timeout polling localhost:8002. Both are wrong for unit
+    tests. End-to-end OAS integration is verified manually per the plan's
+    verification section.
+    """
+
+    def _noop(*_args, **_kwargs):
+        return None
+
+    try:
+        from bait import ophyd_websocket_supervisor as sup
+
+        monkeypatch.setattr(sup.OASSupervisor, "start", _noop)
+        monkeypatch.setattr(sup.OASSupervisor, "wait_ready", lambda self: [])
+        monkeypatch.setattr(sup.OASSupervisor, "stop", _noop)
+    except Exception:
         pass
